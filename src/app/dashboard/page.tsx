@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { User, Heart, MessageCircle, Star, Settings, Bell, ShieldCheck, ChevronRight, Activity, ArrowRight, Loader2, PartyPopper, Inbox, Send } from "lucide-react";
+import { User, Heart, MessageCircle, Star, Settings, Bell, ShieldCheck, ChevronRight, Activity, ArrowRight, Loader2, PartyPopper, Inbox, Send, Eye, GraduationCap } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { createClient } from "@/utils/supabase/client";
 import { calculateMatchScore } from "@/utils/matchScore";
@@ -20,6 +20,7 @@ export default function DashboardPage() {
   const router = useRouter();
   
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [acceptedMatches, setAcceptedMatches] = useState<any[]>([]);
   const [incomingInterests, setIncomingInterests] = useState<any[]>([]);
   const [sentInterests, setSentInterests] = useState<any[]>([]);
   const [recommendations, setRecommendations] = useState<any[]>([]);
@@ -40,7 +41,36 @@ export default function DashboardPage() {
         
       setCurrentUser(userProfile);
 
-      // Fetch Incoming Pending Interests
+      // 1. Fetch Accepted Interests (Mutual Matches)
+      const { data: acceptedData } = await supabase
+        .from('interests')
+        .select(`
+          *,
+          sender:profiles!interests_from_user_id_fkey(*),
+          receiver:profiles!interests_to_user_id_fkey(*)
+        `)
+        .eq('status', 'accepted')
+        .or(`from_user_id.eq.${session.user.id},to_user_id.eq.${session.user.id}`)
+        .order('created_at', { ascending: false });
+
+      if (acceptedData) {
+        const mapped = acceptedData.map(item => {
+          const isSender = item.from_user_id === session.user.id;
+          const partner = isSender ? item.receiver : item.sender;
+          let age = 25;
+          if (partner?.dob) {
+            age = new Date().getFullYear() - new Date(partner.dob).getFullYear();
+          }
+          return {
+            ...item,
+            partner,
+            age
+          };
+        }).filter(item => item.partner); // Ensure partner profile exists
+        setAcceptedMatches(mapped);
+      }
+
+      // 2. Fetch Incoming Pending Interests
       const { data: incoming } = await supabase
         .from('interests')
         .select(`
@@ -53,7 +83,7 @@ export default function DashboardPage() {
 
       if (incoming) setIncomingInterests(incoming);
 
-      // Fetch Sent Interests
+      // 3. Fetch Sent Interests
       const { data: sent } = await supabase
         .from('interests')
         .select(`
@@ -65,7 +95,7 @@ export default function DashboardPage() {
 
       if (sent) setSentInterests(sent);
 
-      // Fetch Recommendations (strictly opposite gender)
+      // 4. Fetch Recommendations (strictly opposite gender)
       const userGender = userProfile?.gender?.toLowerCase()?.trim();
       const targetGender = userGender === 'male' ? 'female' : userGender === 'female' ? 'male' : null;
 
@@ -84,7 +114,8 @@ export default function DashboardPage() {
         // filter out profiles I already sent interests to or received from
         const interactedIds = new Set([
           ...(incoming || []).map(i => i.from_user_id),
-          ...(sent || []).map(i => i.to_user_id)
+          ...(sent || []).map(i => i.to_user_id),
+          ...(acceptedData || []).flatMap(a => [a.from_user_id, a.to_user_id])
         ]);
 
         const available = allProfiles.filter(p => {
@@ -106,13 +137,14 @@ export default function DashboardPage() {
     loadDashboard();
   }, [supabase]);
 
-  const handleInterest = async (interestId: string, action: 'accepted' | 'declined', senderName: string) => {
+  const handleInterest = async (interestId: string, action: 'accepted' | 'declined', senderName: string, senderId?: string) => {
     if (action === 'accepted' && (!currentUser.first_name || currentUser.first_name.trim() === '')) {
       toast.warning("Please complete your profile (add your First Name) before accepting interests.");
       router.push("/profile/edit?highlight=missing");
       return;
     }
 
+    const acceptedItem = incomingInterests.find(i => i.id === interestId);
     setIncomingInterests(prev => prev.filter(i => i.id !== interestId));
 
     const { error } = await supabase
@@ -122,6 +154,13 @@ export default function DashboardPage() {
 
     if (action === 'accepted' && !error) {
       setMutualMatchTrigger(senderName);
+      if (acceptedItem && acceptedItem.sender) {
+        let age = 25;
+        if (acceptedItem.sender.dob) {
+          age = new Date().getFullYear() - new Date(acceptedItem.sender.dob).getFullYear();
+        }
+        setAcceptedMatches(prev => [{ ...acceptedItem, status: 'accepted', partner: acceptedItem.sender, age }, ...prev]);
+      }
       setTimeout(() => setMutualMatchTrigger(null), 5000);
     } else if (action === 'declined') {
       toast.info("Interest declined.");
@@ -169,9 +208,9 @@ export default function DashboardPage() {
     <div className="bg-muted/20 min-h-screen flex flex-col pb-12">
       {mutualMatchTrigger && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="text-center animate-in zoom-in duration-500 delay-100 flex flex-col items-center">
+          <div className="text-center animate-in zoom-in duration-500 delay-100 flex flex-col items-center p-6">
             <PartyPopper className="w-24 h-24 text-yellow-400 mb-6 animate-bounce" />
-            <h2 className="text-5xl font-serif font-bold text-white mb-4">Mutual Match!</h2>
+            <h2 className="text-4xl md:text-5xl font-serif font-bold text-white mb-4">Mutual Match!</h2>
             <p className="text-xl text-white/90 mb-8 max-w-md">
               You and <span className="text-pink-400 font-bold">{mutualMatchTrigger}</span> liked each other. You can now chat!
             </p>
@@ -200,7 +239,7 @@ export default function DashboardPage() {
             <div>
               <h1 className="text-3xl font-serif font-bold mb-1">Welcome back, {currentUser?.first_name}!</h1>
               <p className="text-primary-foreground/80 font-medium">
-                You have {incomingInterests.length} new interest requests.
+                {acceptedMatches.length} Accepted Matches • {incomingInterests.length} Pending Requests
               </p>
             </div>
           </div>
@@ -220,12 +259,16 @@ export default function DashboardPage() {
               <div className="flex items-center gap-3"><Heart className="w-5 h-5" /> Discover Matches</div>
               <ChevronRight className="w-4 h-4 opacity-50" />
             </Link>
+            <Link href="/browse" className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium rounded-xl transition-all text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+              <div className="flex items-center gap-3"><User className="w-5 h-5" /> Browse Profiles</div>
+              <ChevronRight className="w-4 h-4 opacity-50" />
+            </Link>
             <Link href="/messages" className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium rounded-xl transition-all text-muted-foreground hover:bg-muted/50 hover:text-foreground">
               <div className="flex items-center gap-3"><MessageCircle className="w-5 h-5" /> Messages</div>
               <ChevronRight className="w-4 h-4 opacity-50" />
             </Link>
             <Link href="/profile/edit" className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium rounded-xl transition-all text-muted-foreground hover:bg-muted/50 hover:text-foreground">
-              <div className="flex items-center gap-3"><User className="w-5 h-5" /> Edit Profile</div>
+              <div className="flex items-center gap-3"><Settings className="w-5 h-5" /> Edit Profile</div>
               <ChevronRight className="w-4 h-4 opacity-50" />
             </Link>
           </div>
@@ -236,18 +279,87 @@ export default function DashboardPage() {
           
           <ProfileCompletion profile={currentUser} />
 
-          {/* Interests Tabs */}
+          {/* Interests & Matches Tabs */}
           <div className="bg-white rounded-2xl shadow-sm border border-border p-6 md:p-8">
-            <Tabs defaultValue="incoming" className="w-full">
-              <TabsList className="mb-6 grid w-full max-w-md grid-cols-2">
-                <TabsTrigger value="incoming" className="flex gap-2">
+            <Tabs defaultValue={acceptedMatches.length > 0 ? "accepted" : (incomingInterests.length > 0 ? "incoming" : "sent")} className="w-full">
+              <TabsList className="mb-6 grid w-full max-w-lg grid-cols-3">
+                <TabsTrigger value="accepted" className="flex gap-1.5 font-medium">
+                  <Heart className="w-4 h-4 text-pink-500 fill-pink-500" /> Matches ({acceptedMatches.length})
+                </TabsTrigger>
+                <TabsTrigger value="incoming" className="flex gap-1.5 font-medium">
                   <Inbox className="w-4 h-4" /> Incoming ({incomingInterests.length})
                 </TabsTrigger>
-                <TabsTrigger value="sent" className="flex gap-2">
+                <TabsTrigger value="sent" className="flex gap-1.5 font-medium">
                   <Send className="w-4 h-4" /> Sent ({sentInterests.length})
                 </TabsTrigger>
               </TabsList>
               
+              {/* TAB 1: ACCEPTED MATCHES */}
+              <TabsContent value="accepted">
+                {acceptedMatches.length === 0 ? (
+                  <div className="text-center py-12 bg-muted/30 rounded-xl border border-dashed border-border flex flex-col items-center">
+                    <div className="w-16 h-16 bg-pink-100 rounded-full flex items-center justify-center mb-4">
+                      <Heart className="w-8 h-8 text-pink-500" />
+                    </div>
+                    <h3 className="text-lg font-bold mb-2">No Accepted Matches Yet</h3>
+                    <p className="text-muted-foreground max-w-sm">When you and another member accept each other&apos;s interests, your mutual matches will appear here.</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {acceptedMatches.map((match) => (
+                      <div key={match.id} className="flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4 p-5 rounded-2xl border border-border/80 hover:bg-muted/20 hover:border-primary/30 transition-all shadow-xs">
+                        
+                        {/* Profile Photo & Info (Clickable to open profile) */}
+                        <Link href={`/profile/${match.partner?.id}`} className="flex items-center gap-4 flex-1 text-center sm:text-left group">
+                          <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border-2 border-primary/20 overflow-hidden relative group-hover:border-primary transition-colors">
+                            {match.partner?.avatar_url ? (
+                              <img src={match.partner.avatar_url} alt={match.partner.first_name} className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-xl font-bold font-serif text-primary">
+                                {match.partner?.first_name?.charAt(0) || "U"}
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 justify-center sm:justify-start">
+                              <h4 className="font-semibold text-lg text-foreground group-hover:text-primary transition-colors">
+                                {match.partner?.first_name} {match.partner?.last_name}
+                              </h4>
+                              {match.age && <span className="text-sm text-muted-foreground">({match.age} yrs)</span>}
+                              {match.partner?.is_verified && <ShieldCheck className="w-4 h-4 text-emerald-600" />}
+                            </div>
+                            <p className="text-sm text-muted-foreground mt-0.5">
+                              {match.partner?.city || "Location unknown"} • {match.partner?.profession || match.partner?.profession_type || "CA/CS Professional"}
+                            </p>
+                            {match.partner?.profession_type && (
+                              <Badge className="bg-secondary/10 text-secondary border-secondary/30 text-[11px] mt-1.5 font-semibold">
+                                <GraduationCap className="w-3 h-3 mr-1" />
+                                {match.partner.profession_type}
+                              </Badge>
+                            )}
+                          </div>
+                        </Link>
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Link href={`/messages?with=${match.partner?.id}`}>
+                            <Button className="bg-primary hover:bg-primary-hover text-white h-9 px-5 gap-1.5 shadow-sm">
+                              <MessageCircle className="w-4 h-4" /> Message
+                            </Button>
+                          </Link>
+                          <Link href={`/profile/${match.partner?.id}`}>
+                            <Button variant="outline" className="h-9 px-4 gap-1.5 hover:bg-muted">
+                              <Eye className="w-4 h-4" /> View Profile
+                            </Button>
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+              
+              {/* TAB 2: INCOMING INTERESTS */}
               <TabsContent value="incoming">
                 {incomingInterests.length === 0 ? (
                   <div className="text-center py-12 bg-muted/30 rounded-xl border border-dashed border-border flex flex-col items-center">
@@ -260,40 +372,65 @@ export default function DashboardPage() {
                 ) : (
                   <div className="flex flex-col gap-4">
                     {incomingInterests.map((interest) => (
-                      <div key={interest.id} className="flex flex-col sm:flex-row items-center sm:items-start gap-4 p-4 rounded-xl border border-border hover:bg-muted/30 transition-colors">
-                        <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20 overflow-hidden relative">
-                           <ShieldCheck className="w-8 h-8 text-primary/50" />
-                        </div>
-                        <div className="flex-1 text-center sm:text-left">
-                          <h4 className="font-semibold text-lg mb-1">{interest.sender?.first_name} {interest.sender?.last_name}</h4>
-                          <p className="text-sm text-muted-foreground mb-3">
-                            {interest.sender?.city} • {interest.sender?.profession || "Professional"}
-                          </p>
-                          <div className="flex gap-2 justify-center sm:justify-start">
-                            <Button 
-                              onClick={() => handleInterest(interest.id, 'accepted', interest.sender?.first_name || 'User')}
-                              className="bg-green-600 hover:bg-green-700 text-white h-9 px-6"
-                            >
-                              Accept
-                            </Button>
-                            <Button 
-                              onClick={() => handleInterest(interest.id, 'declined', "User")}
-                              variant="outline" 
-                              className="h-9 px-6 hover:bg-destructive/10 hover:text-destructive"
-                            >
-                              Decline
-                            </Button>
+                      <div key={interest.id} className="flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4 p-5 rounded-2xl border border-border/80 hover:bg-muted/20 transition-all shadow-xs">
+                        
+                        {/* Profile Info (Clickable to open profile) */}
+                        <Link href={`/profile/${interest.sender?.id}`} className="flex items-center gap-4 flex-1 text-center sm:text-left group">
+                          <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border-2 border-primary/20 overflow-hidden relative group-hover:border-primary transition-colors">
+                            {interest.sender?.avatar_url ? (
+                              <img src={interest.sender.avatar_url} alt={interest.sender.first_name} className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-xl font-bold font-serif text-primary">
+                                {interest.sender?.first_name?.charAt(0) || "U"}
+                              </span>
+                            )}
                           </div>
+                          <div>
+                            <h4 className="font-semibold text-lg text-foreground group-hover:text-primary transition-colors">
+                              {interest.sender?.first_name} {interest.sender?.last_name}
+                            </h4>
+                            <p className="text-sm text-muted-foreground mt-0.5">
+                              {interest.sender?.city || "Location unknown"} • {interest.sender?.profession || interest.sender?.profession_type || "CA/CS Professional"}
+                            </p>
+                            <span className="text-xs text-muted-foreground mt-1 block">
+                              Received {new Date(interest.created_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </Link>
+
+                        {/* Actions */}
+                        <div className="flex flex-wrap items-center gap-2 justify-center sm:justify-end shrink-0">
+                          <Button 
+                            onClick={() => handleInterest(interest.id, 'accepted', interest.sender?.first_name || 'User', interest.sender?.id)}
+                            className="bg-green-600 hover:bg-green-700 text-white h-9 px-5 font-semibold"
+                          >
+                            Accept
+                          </Button>
+                          <Button 
+                            onClick={() => handleInterest(interest.id, 'declined', "User")}
+                            variant="outline" 
+                            className="h-9 px-4 hover:bg-destructive/10 hover:text-destructive"
+                          >
+                            Decline
+                          </Button>
+                          <Link href={`/messages?with=${interest.sender?.id}`}>
+                            <Button variant="ghost" size="icon" title="Send direct message" className="h-9 w-9 text-primary hover:bg-primary/10">
+                              <MessageCircle className="w-4 h-4" />
+                            </Button>
+                          </Link>
+                          <Link href={`/profile/${interest.sender?.id}`}>
+                            <Button variant="ghost" size="icon" title="View Profile" className="h-9 w-9 hover:bg-muted">
+                              <Eye className="w-4 h-4 text-muted-foreground" />
+                            </Button>
+                          </Link>
                         </div>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap mt-2 sm:mt-0">
-                          {new Date(interest.created_at).toLocaleDateString()}
-                        </span>
                       </div>
                     ))}
                   </div>
                 )}
               </TabsContent>
               
+              {/* TAB 3: SENT INTERESTS */}
               <TabsContent value="sent">
                 {sentInterests.length === 0 ? (
                   <div className="text-center py-12 bg-muted/30 rounded-xl border border-dashed border-border flex flex-col items-center">
@@ -301,31 +438,59 @@ export default function DashboardPage() {
                       <Send className="w-8 h-8 text-primary/60" />
                     </div>
                     <h3 className="text-lg font-bold mb-2">No Sent Interests</h3>
-                    <p className="text-muted-foreground max-w-sm">You haven't sent any interests yet. Check out the Discover page to find potential matches.</p>
+                    <p className="text-muted-foreground max-w-sm">You haven&apos;t sent any interests yet. Check out Discover or Browse to find potential matches.</p>
                   </div>
                 ) : (
                   <div className="flex flex-col gap-4">
                     {sentInterests.map((interest) => (
-                      <div key={interest.id} className="flex flex-col sm:flex-row items-center sm:items-start gap-4 p-4 rounded-xl border border-border hover:bg-muted/30 transition-colors">
-                        <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20 overflow-hidden relative">
-                           <ShieldCheck className="w-8 h-8 text-primary/50" />
+                      <div key={interest.id} className="flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4 p-5 rounded-2xl border border-border/80 hover:bg-muted/20 transition-all shadow-xs">
+                        
+                        {/* Profile Info (Clickable to open profile) */}
+                        <Link href={`/profile/${interest.receiver?.id}`} className="flex items-center gap-4 flex-1 text-center sm:text-left group">
+                          <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border-2 border-primary/20 overflow-hidden relative group-hover:border-primary transition-colors">
+                            {interest.receiver?.avatar_url ? (
+                              <img src={interest.receiver.avatar_url} alt={interest.receiver.first_name} className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-xl font-bold font-serif text-primary">
+                                {interest.receiver?.first_name?.charAt(0) || "U"}
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 justify-center sm:justify-start">
+                              <h4 className="font-semibold text-lg text-foreground group-hover:text-primary transition-colors">
+                                {interest.receiver?.first_name} {interest.receiver?.last_name}
+                              </h4>
+                              <Badge variant="outline" className={`text-xs ${
+                                interest.status === 'accepted' ? 'bg-green-100 text-green-700 border-green-300' :
+                                interest.status === 'declined' ? 'bg-red-100 text-red-700 border-red-300' :
+                                'bg-amber-100 text-amber-700 border-amber-300'
+                              }`}>
+                                {interest.status.charAt(0).toUpperCase() + interest.status.slice(1)}
+                              </Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground mt-0.5">
+                              {interest.receiver?.city || "Location unknown"} • {interest.receiver?.profession || interest.receiver?.profession_type || "CA/CS Professional"}
+                            </p>
+                            <span className="text-xs text-muted-foreground mt-1 block">
+                              Sent {new Date(interest.created_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </Link>
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Link href={`/messages?with=${interest.receiver?.id}`}>
+                            <Button variant="outline" className="h-9 px-4 gap-1.5 text-primary border-primary/30 hover:bg-primary/10">
+                              <MessageCircle className="w-4 h-4" /> Message
+                            </Button>
+                          </Link>
+                          <Link href={`/profile/${interest.receiver?.id}`}>
+                            <Button variant="ghost" className="h-9 px-4 gap-1.5 hover:bg-muted">
+                              <Eye className="w-4 h-4" /> View Profile
+                            </Button>
+                          </Link>
                         </div>
-                        <div className="flex-1 text-center sm:text-left">
-                          <h4 className="font-semibold text-lg mb-1">{interest.receiver?.first_name} {interest.receiver?.last_name}</h4>
-                          <p className="text-sm text-muted-foreground mb-3">
-                            {interest.receiver?.city} • {interest.receiver?.profession || "Professional"}
-                          </p>
-                          <Badge variant="outline" className={`
-                            ${interest.status === 'accepted' ? 'bg-green-100 text-green-700' : ''}
-                            ${interest.status === 'declined' ? 'bg-red-100 text-red-700' : ''}
-                            ${interest.status === 'pending' ? 'bg-yellow-100 text-yellow-700' : ''}
-                          `}>
-                            {interest.status.charAt(0).toUpperCase() + interest.status.slice(1)}
-                          </Badge>
-                        </div>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap mt-2 sm:mt-0">
-                          {new Date(interest.created_at).toLocaleDateString()}
-                        </span>
                       </div>
                     ))}
                   </div>
@@ -349,7 +514,7 @@ export default function DashboardPage() {
                     <Star className="w-8 h-8 text-secondary" />
                   </div>
                   <h3 className="text-xl font-bold mb-2">Caught up for now!</h3>
-                  <p className="text-muted-foreground mb-6 max-w-sm">We'll find more recommendations for you soon. Try updating your preferences.</p>
+                  <p className="text-muted-foreground mb-6 max-w-sm">We&apos;ll find more recommendations for you soon. Try updating your preferences.</p>
                   <Link href="/profile/edit">
                     <Button variant="outline">Update Preferences</Button>
                   </Link>
@@ -382,13 +547,18 @@ export default function DashboardPage() {
                         <span className="text-muted-foreground">Community</span>
                         <span>{rec.religion || "Any"}</span>
                       </div>
-                      <div className="mt-auto pt-4">
+                      <div className="mt-auto pt-4 flex gap-2">
                          <Button 
                            onClick={() => handleSendInterest(rec.id)}
-                           className="w-full text-xs h-9 bg-primary hover:bg-primary-hover flex gap-2 items-center"
+                           className="flex-1 text-xs h-9 bg-primary hover:bg-primary-hover flex gap-1.5 items-center font-semibold"
                          >
                            <Heart className="w-4 h-4" /> Send Interest
                          </Button>
+                         <Link href={`/messages?with=${rec.id}`}>
+                           <Button variant="outline" size="icon" title="Send direct message" className="h-9 w-9 text-primary border-primary/30 hover:bg-primary/10">
+                             <MessageCircle className="w-4 h-4" />
+                           </Button>
+                         </Link>
                       </div>
                     </CardContent>
                   </Card>
@@ -396,8 +566,9 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
-          
+
         </div>
+
       </div>
     </div>
   );

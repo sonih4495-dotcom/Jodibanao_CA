@@ -23,7 +23,8 @@ import {
   RotateCcw,
   UserCheck,
   Building2,
-  MapPin
+  MapPin,
+  MessageCircle
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { calculateMatchScore } from "@/utils/matchScore";
@@ -778,6 +779,16 @@ export default function BrowsePage() {
                           >
                             {btnConfig.text}
                           </Button>
+                          <Link href={`/messages?with=${profile.id}`}>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              title="Send Message"
+                              className="h-10 w-10 rounded-xl text-primary border-primary/30 hover:bg-primary/10 shrink-0"
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                            </Button>
+                          </Link>
                           <Button
                             variant="ghost"
                             size="icon"
