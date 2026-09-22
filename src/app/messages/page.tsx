@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { ChatWindow } from "@/components/chat/ChatWindow";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 import { VoiceCallModal } from "@/components/chat/VoiceCallModal";
 import { VideoCallModal } from "@/components/chat/VideoCallModal";
 
-export default function Messages() {
+function MessagesContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
   
   const [user, setUser] = useState<any>(null);
@@ -48,19 +49,57 @@ export default function Messages() {
         .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`)
         .order("last_message_at", { ascending: false });
 
-      if (myConversations) {
-        // Sort individual messages inside conversations to get the latest easily
-        myConversations.forEach(c => {
-          c.messages?.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        });
-        setConversations(myConversations);
+      let loadedConversations = myConversations || [];
+
+      // Sort messages
+      loadedConversations.forEach(c => {
+        c.messages?.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      });
+
+      // Check if URL specifies chatId or with (partner id)
+      const paramChatId = searchParams.get("chatId");
+      const paramWith = searchParams.get("with");
+
+      if (paramChatId) {
+        setActiveChatId(paramChatId);
+      } else if (paramWith) {
+        // Find existing conversation with this user
+        let existing = loadedConversations.find(
+          c => c.user1_id === paramWith || c.user2_id === paramWith
+        );
+
+        if (existing) {
+          setActiveChatId(existing.id);
+        } else {
+          // Create new conversation
+          const { data: newConv } = await supabase
+            .from("conversations")
+            .insert({
+              user1_id: session.user.id,
+              user2_id: paramWith,
+              last_message_at: new Date().toISOString()
+            })
+            .select(`
+              *,
+              user1:profiles!conversations_user1_id_fkey(id, first_name, last_name, avatar_url),
+              user2:profiles!conversations_user2_id_fkey(id, first_name, last_name, avatar_url),
+              messages(id, content, created_at, status, media_url, sender_id)
+            `)
+            .single();
+
+          if (newConv) {
+            loadedConversations = [newConv, ...loadedConversations];
+            setActiveChatId(newConv.id);
+          }
+        }
       }
-      
+
+      setConversations(loadedConversations);
       setIsLoading(false);
     };
 
     initChat();
-  }, [router]);
+  }, [router, searchParams]);
 
   // 2. Fetch Active Chat Messages & Match Status
   useEffect(() => {
@@ -117,7 +156,6 @@ export default function Messages() {
   useEffect(() => {
     if (!user) return;
 
-    // Listen for new messages globally
     const channel = supabase
       .channel("realtime-messages")
       .on(
@@ -130,7 +168,6 @@ export default function Messages() {
         (payload) => {
           const newMsg = payload.new;
           
-          // If the message belongs to the currently active window, append it
           if (newMsg.conversation_id === activeChatId) {
             setMessages((prev) => {
               if (prev.find((m) => m.id === newMsg.id)) return prev;
@@ -173,9 +210,9 @@ export default function Messages() {
   const activeConversation = conversations.find(c => c.id === activeChatId);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-muted/20">
+    <div className="flex flex-col h-[calc(100vh-80px)] overflow-hidden bg-muted/20">
       
-      <div className="flex-1 flex overflow-hidden container mx-auto max-w-7xl py-6 px-4">
+      <div className="flex-1 flex overflow-hidden container mx-auto max-w-7xl py-4 px-4">
         <div className="bg-card w-full h-full rounded-2xl shadow-xl flex overflow-hidden border border-border/40">
           
           <ChatSidebar 
@@ -218,5 +255,17 @@ export default function Messages() {
         />
       )}
     </div>
+  );
+}
+
+export default function Messages() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-muted/20">
+        <Loader2 className="w-10 h-10 animate-spin text-primary" />
+      </div>
+    }>
+      <MessagesContent />
+    </Suspense>
   );
 }

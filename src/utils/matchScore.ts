@@ -1,6 +1,13 @@
 export function calculateMatchScore(userA: any, userB: any) {
   if (!userA || !userB) return 0;
   
+  // Strict Gender Matching: Male matches Female only
+  const aGender = userA.gender?.toLowerCase()?.trim();
+  const bGender = userB.gender?.toLowerCase()?.trim();
+  if (aGender && bGender && aGender === bGender) {
+    return 0;
+  }
+
   let score = 0;
 
   // 1. Religion match (25 pts) 

@@ -69,14 +69,25 @@ export default function BrowsePage() {
       .eq('id', session.user.id)
       .maybeSingle();
 
-    setCurrentUser(userProfile || { id: session.user.id });
+    const userGender = userProfile?.gender?.toLowerCase()?.trim();
+    const targetGender = userGender === 'male' ? 'female' : userGender === 'female' ? 'male' : null;
 
-    // Get paginated profiles
-    const { data: allProfiles, error } = await supabase
+    let browseQuery = supabase
       .from('profiles')
       .select('*')
-      .neq('id', session.user.id)
+      .neq('id', session.user.id);
+
+    if (targetGender) {
+      browseQuery = browseQuery.ilike('gender', targetGender);
+    }
+
+    // Get paginated profiles
+    const { data: rawProfiles, error } = await browseQuery
       .range(pageNumber * 12, (pageNumber + 1) * 12 - 1);
+
+    const allProfiles = targetGender 
+      ? rawProfiles?.filter(p => p.gender && p.gender.toLowerCase().trim() === targetGender) 
+      : rawProfiles;
 
     if (error || !allProfiles || allProfiles.length < 12) {
       setHasMore(false);

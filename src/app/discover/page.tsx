@@ -42,13 +42,25 @@ function DiscoverContent() {
       .eq('to_user_id', session.user.id);
     const incomingIds = new Set(incoming?.map(i => i.from_user_id) || []);
 
-    const { data: allProfiles } = await supabase
+    let profileQuery = supabase
       .from('profiles')
       .select('*')
       .neq('id', session.user.id);
 
+    const userGender = userProfile?.gender?.toLowerCase()?.trim();
+    const targetGender = userGender === 'male' ? 'female' : userGender === 'female' ? 'male' : null;
+    if (targetGender) {
+      profileQuery = profileQuery.ilike('gender', targetGender);
+    }
+
+    const { data: allProfiles } = await profileQuery;
+
     if (allProfiles && userProfile) {
-      const available = allProfiles.filter(p => !sentIds.has(p.id) && !incomingIds.has(p.id));
+      const available = allProfiles.filter(p => {
+        if (sentIds.has(p.id) || incomingIds.has(p.id)) return false;
+        if (targetGender && p.gender && p.gender.toLowerCase().trim() !== targetGender) return false;
+        return true;
+      });
       const scored = available.map(p => {
         let age = 25;
         if (p.dob) age = new Date().getFullYear() - new Date(p.dob).getFullYear();

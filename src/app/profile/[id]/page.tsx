@@ -231,6 +231,12 @@ function ProfileDetailContent() {
             Back
           </Button>
           <div className="flex items-center gap-2">
+            <Link href={`/messages?with=${profileId}`}>
+              <Button size="sm" className="bg-primary hover:bg-primary-hover text-white gap-1.5 shadow-sm">
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>Message</span>
+              </Button>
+            </Link>
             <Button variant="ghost" size="sm" onClick={handleShare} className="gap-2">
               <Share2 className="w-4 h-4" />
               <span className="hidden sm:inline">Share</span>
@@ -329,36 +335,34 @@ function ProfileDetailContent() {
 
             {/* Actions */}
             <div className="space-y-3">
+              {/* Direct Message Option - Always Available */}
+              <Link href={`/messages?with=${profileId}`}>
+                <Button className="w-full bg-primary hover:bg-primary-hover text-white gap-2 shadow-sm font-semibold active:scale-95 transition-transform">
+                  <MessageCircle className="w-4 h-4" /> Message {profile.first_name || ""}
+                </Button>
+              </Link>
+
               {interestStatus === "mutual" ? (
-                <>
-                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
-                    <CheckCircle2 className="w-5 h-5 text-green-600 mx-auto mb-1" />
-                    <p className="text-sm font-semibold text-green-800">It's a Mutual Match! 🎉</p>
-                  </div>
-                  <Link href="/messages">
-                    <Button className="w-full bg-primary hover:bg-primary-hover text-white gap-2">
-                      <MessageCircle className="w-4 h-4" /> Chat Now
-                    </Button>
-                  </Link>
-                </>
+                <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+                  <CheckCircle2 className="w-5 h-5 text-green-600 mx-auto mb-1" />
+                  <p className="text-sm font-semibold text-green-800">It's a Mutual Match! 🎉</p>
+                </div>
               ) : interestStatus === "sent" ? (
                 <Button disabled className="w-full gap-2 border-primary/30 text-primary" variant="outline">
                   <Heart className="w-4 h-4 fill-primary" /> Interest Sent
                 </Button>
               ) : interestStatus === "received" ? (
-                <>
-                  <p className="text-sm text-center text-muted-foreground">This person is interested in you!</p>
-                  <Link href="/dashboard">
-                    <Button className="w-full bg-primary hover:bg-primary-hover text-white gap-2">
-                      <Heart className="w-4 h-4" /> Respond to Interest
-                    </Button>
-                  </Link>
-                </>
+                <Link href="/dashboard">
+                  <Button className="w-full bg-secondary hover:bg-secondary-hover text-white gap-2" variant="default">
+                    <Heart className="w-4 h-4" /> Respond to Interest
+                  </Button>
+                </Link>
               ) : (
                 <Button
                   onClick={handleSendInterest}
                   disabled={sendingInterest}
-                  className="w-full bg-primary hover:bg-primary-hover text-white gap-2 active:scale-95 transition-transform"
+                  variant="outline"
+                  className="w-full border-primary/40 text-primary hover:bg-primary/10 gap-2 active:scale-95 transition-transform"
                 >
                   {sendingInterest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Heart className="w-4 h-4" />}
                   Send Interest

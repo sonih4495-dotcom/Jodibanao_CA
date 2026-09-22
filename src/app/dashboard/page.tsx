@@ -65,12 +65,20 @@ export default function DashboardPage() {
 
       if (sent) setSentInterests(sent);
 
-      // Fetch Recommendations
-      const { data: allProfiles } = await supabase
+      // Fetch Recommendations (strictly opposite gender)
+      const userGender = userProfile?.gender?.toLowerCase()?.trim();
+      const targetGender = userGender === 'male' ? 'female' : userGender === 'female' ? 'male' : null;
+
+      let recQuery = supabase
         .from('profiles')
         .select('*')
-        .neq('id', session.user.id)
-        .limit(15);
+        .neq('id', session.user.id);
+
+      if (targetGender) {
+        recQuery = recQuery.ilike('gender', targetGender);
+      }
+
+      const { data: allProfiles } = await recQuery.limit(25);
         
       if (allProfiles && userProfile) {
         // filter out profiles I already sent interests to or received from
@@ -79,7 +87,11 @@ export default function DashboardPage() {
           ...(sent || []).map(i => i.to_user_id)
         ]);
 
-        const available = allProfiles.filter(p => !interactedIds.has(p.id));
+        const available = allProfiles.filter(p => {
+          if (interactedIds.has(p.id)) return false;
+          if (targetGender && p.gender && p.gender.toLowerCase().trim() !== targetGender) return false;
+          return true;
+        });
 
         const scored = available.map(p => {
           let age = 25;
