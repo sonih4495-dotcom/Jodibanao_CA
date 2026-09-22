@@ -1,26 +1,9 @@
 import type { Metadata, Viewport } from "next";
-import { Playfair_Display, Inter } from "next/font/google";
 import "./globals.css";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
 import { Toaster } from "sonner";
-
-const playfairDisplay = Playfair_Display({
-  variable: "--font-serif",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
-  display: "swap",
-  adjustFontFallback: true,
-});
-
-const inter = Inter({
-  variable: "--font-sans",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-  display: "swap",
-  adjustFontFallback: true,
-});
 
 export const viewport: Viewport = {
   themeColor: "#7B1C3C",
@@ -44,9 +27,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body
-        className={`${playfairDisplay.variable} ${inter.variable} font-sans antialiased min-h-screen flex flex-col bg-background text-foreground`}
+        suppressHydrationWarning
+        className="font-sans antialiased min-h-screen flex flex-col bg-background text-foreground"
       >
         <Header />
         <main className="flex-1 pb-16 md:pb-0">

@@ -74,25 +74,18 @@ function MessagesContent() {
   useEffect(() => {
     let isMounted = true;
 
-    const initChat = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        router.push("/login");
-        return;
-      }
-      
-      if (!isMounted) return;
-      setUser(session.user);
+    const initChat = async (currentUser: any) => {
+      if (!currentUser || !isMounted) return;
+      setUser(currentUser);
 
-      let loadedConversations = await fetchConversationsList(session.user.id);
+      let loadedConversations = await fetchConversationsList(currentUser.id);
 
       const paramChatId = searchParams.get("chatId");
       const paramWith = searchParams.get("with");
 
       if (paramChatId) {
         setActiveChatId(paramChatId);
-      } else if (paramWith && paramWith !== session.user.id) {
+      } else if (paramWith && paramWith !== currentUser.id) {
         // Find if conversation already exists with this partner
         let existing = loadedConversations.find(
           c => c.user1_id === paramWith || c.user2_id === paramWith
@@ -106,12 +99,12 @@ function MessagesContent() {
             const res = await fetch("/api/conversations", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ partnerId: paramWith })
+              body: JSON.stringify({ partnerId: paramWith, currentUserId: currentUser.id })
             });
             const result = await res.json();
             if (result.conversation) {
               // Reload conversations list
-              loadedConversations = await fetchConversationsList(session.user.id);
+              loadedConversations = await fetchConversationsList(currentUser.id);
               setActiveChatId(result.conversation.id);
             }
           } catch (e) {
@@ -131,12 +124,37 @@ function MessagesContent() {
       }
     };
 
-    initChat();
+    // Check existing session or user
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!isMounted) return;
+      if (session?.user) {
+        initChat(session.user);
+      } else {
+        supabase.auth.getUser().then(({ data: { user: authUser } }) => {
+          if (!isMounted) return;
+          if (authUser) {
+            initChat(authUser);
+          } else {
+            setIsLoading(false);
+            router.push("/login");
+          }
+        });
+      }
+    });
+
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!isMounted) return;
+      if (session?.user) {
+        initChat(session.user);
+      }
+    });
 
     return () => {
       isMounted = false;
+      subscription.unsubscribe();
     };
-  }, [router, searchParams, fetchConversationsList]);
+  }, [router, searchParams, fetchConversationsList, supabase]);
 
   // 2. Fetch Active Chat Messages & Match Status
   useEffect(() => {
