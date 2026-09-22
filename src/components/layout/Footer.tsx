@@ -1,7 +1,50 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
+import { createClient } from "@/utils/supabase/client";
+import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const supabase = createClient();
+
+  const handleSubscribe = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) {
+      toast.error("Please enter your email address.");
+      return;
+    }
+    
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      toast.error("Please enter a valid email address.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.from("newsletter_subscribers").insert({ email });
+      if (error) {
+        if (error.code === "23505") {
+          toast.info("You are already subscribed to our newsletter!");
+        } else {
+          throw error;
+        }
+      } else {
+        toast.success("Successfully subscribed to newsletter!");
+        setEmail("");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to subscribe. Please try again later.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <footer className="w-full border-t border-border bg-background pt-12 pb-8">
@@ -15,7 +58,7 @@ export function Footer() {
               </span>
             </Link>
             <p className="text-sm text-muted-foreground leading-relaxed max-w-xs">
-              A trusted matchmaking platform for South Asian users to find life partners based on compatibility, values, religion, and family background.
+              A trusted, 100% Free Matrimony platform for Chartered Accountants & Company Secretaries to find life partners based on compatibility, values, religion, and family background.
             </p>
           </div>
 
@@ -31,11 +74,6 @@ export function Footer() {
               <li>
                 <Link href="/success-stories" className="text-sm text-foreground/80 hover:text-primary transition-colors">
                   Success Stories
-                </Link>
-              </li>
-              <li>
-                <Link href="/membership" className="text-sm text-foreground/80 hover:text-primary transition-colors">
-                  Premium Plans
                 </Link>
               </li>
               <li>
@@ -61,6 +99,11 @@ export function Footer() {
                 </Link>
               </li>
               <li>
+                <Link href="/safety" className="text-sm text-foreground/80 hover:text-primary transition-colors">
+                  Safety Tips
+                </Link>
+              </li>
+              <li>
                 <Link href="/privacy" className="text-sm text-foreground/80 hover:text-primary transition-colors">
                   Privacy Policy
                 </Link>
@@ -79,17 +122,19 @@ export function Footer() {
             <p className="text-sm text-muted-foreground mb-4">
               Join our newsletter for matchmaking tips and success stories.
             </p>
-            {/* Simple mock subscribe form */}
-            <div className="flex w-full max-w-sm items-center space-x-2">
+            <form onSubmit={handleSubscribe} className="flex w-full max-w-sm items-center space-x-2">
               <input 
                 type="email" 
-                placeholder="Email address" 
+                placeholder="Email address"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={loading}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:border-ring"
               />
-              <button className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring bg-primary text-primary-foreground hover:bg-primary-hover h-9 px-4 py-2 shadow-sm">
-                Subscribe
+              <button type="submit" disabled={loading} className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring bg-primary text-primary-foreground hover:bg-primary-hover h-9 px-4 py-2 shadow-sm disabled:opacity-50">
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Subscribe"}
               </button>
-            </div>
+            </form>
           </div>
         </div>
 

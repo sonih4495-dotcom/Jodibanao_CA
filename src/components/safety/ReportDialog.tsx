@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ShieldAlert, Loader2 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
+import { toast } from "sonner";
 
 interface ReportDialogProps {
   open: boolean;
@@ -17,12 +19,12 @@ interface ReportDialogProps {
 }
 
 const REASONS = [
-  { value: "fake_profile", label: "Fake / Fraudulent Profile" },
-  { value: "abusive", label: "Abusive or Threatening Behavior" },
-  { value: "spam", label: "Spam or Solicitation" },
-  { value: "married", label: "Already Married" },
-  { value: "wrong_info", label: "Incorrect / Misleading Information" },
+  { value: "fake_profile", label: "Fake Profile" },
+  { value: "harassment", label: "Harassment or Abuse" },
   { value: "inappropriate_photo", label: "Inappropriate Photo" },
+  { value: "scam", label: "Scam or Fraud" },
+  { value: "impersonation", label: "Impersonation" },
+  { value: "married_misleading", label: "Married / Misleading Status" },
   { value: "other", label: "Other" },
 ];
 
@@ -32,24 +34,70 @@ export function ReportDialog({ open, onClose, reportedUserId, reportedName }: Re
   const [details, setDetails] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  const [blockUser, setBlockUser] = useState(false);
 
   const handleSubmit = async () => {
     if (!reason) return;
     setSubmitting(true);
     
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      
+      const currentUserId = session.user.id;
 
-    await supabase.from("reports").insert({
-      reporter_id: session.user.id,
-      reported_id: reportedUserId,
-      reason,
-      details: details.trim() || null,
-    });
+      // Check if already reported
+      const { data: existingReport } = await supabase
+        .from("reports")
+        .select("id")
+        .eq("reporter_id", currentUserId)
+        .eq("reported_id", reportedUserId)
+        .maybeSingle();
 
-    setDone(true);
-    setSubmitting(false);
-    setTimeout(() => { onClose(); setDone(false); setReason(""); setDetails(""); }, 2000);
+      if (existingReport) {
+        toast.info("You have already reported this user.");
+      } else {
+        const { error: reportError } = await supabase.from("reports").insert({
+          reporter_id: currentUserId,
+          reported_id: reportedUserId,
+          reason,
+          details: details.trim() || null,
+          status: "pending",
+        });
+        
+        if (reportError) throw reportError;
+      }
+
+      // Handle block
+      if (blockUser) {
+        const { data: existingBlock } = await supabase
+          .from("blocked_users")
+          .select("id")
+          .eq("blocker_id", currentUserId)
+          .eq("blocked_id", reportedUserId)
+          .maybeSingle();
+          
+        if (!existingBlock) {
+          const { error: blockError } = await supabase.from("blocked_users").insert({
+            blocker_id: currentUserId,
+            blocked_id: reportedUserId,
+          });
+          
+          if (blockError) throw blockError;
+          toast.success("User blocked.");
+        }
+      }
+
+      setDone(true);
+      if (!existingReport) {
+        toast.success("Report submitted successfully.");
+      }
+    } catch (error: any) {
+      toast.error(error.message || "An error occurred.");
+    } finally {
+      setSubmitting(false);
+      setTimeout(() => { onClose(); setDone(false); setReason(""); setDetails(""); setBlockUser(false); }, 2000);
+    }
   };
 
   return (
@@ -59,6 +107,9 @@ export function ReportDialog({ open, onClose, reportedUserId, reportedName }: Re
           <DialogTitle className="font-serif text-xl flex items-center gap-2 text-destructive">
             <ShieldAlert className="w-5 h-5" /> Report Profile
           </DialogTitle>
+          <DialogDescription>
+            Help us keep the community safe. All reports are reviewed by our team.
+          </DialogDescription>
         </DialogHeader>
 
         {done ? (
@@ -75,7 +126,6 @@ export function ReportDialog({ open, onClose, reportedUserId, reportedName }: Re
           <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
               You are reporting <span className="font-semibold text-foreground">{reportedName}</span>. 
-              All reports are reviewed by our safety team.
             </p>
 
             <div className="space-y-2">
@@ -102,6 +152,17 @@ export function ReportDialog({ open, onClose, reportedUserId, reportedName }: Re
                 className="resize-none"
               />
             </div>
+            
+            <div className="flex items-center space-x-2 pt-2">
+              <Checkbox 
+                id="block-user" 
+                checked={blockUser} 
+                onCheckedChange={(checked) => setBlockUser(!!checked)} 
+              />
+              <Label htmlFor="block-user" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                Also block this user from contacting me
+              </Label>
+            </div>
           </div>
         )}
 
@@ -121,3 +182,4 @@ export function ReportDialog({ open, onClose, reportedUserId, reportedName }: Re
     </Dialog>
   );
 }
+

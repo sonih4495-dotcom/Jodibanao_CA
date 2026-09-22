@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, ArrowLeft, Upload, CheckCircle2, ShieldCheck, Eye, EyeOff, Loader2, GraduationCap } from "lucide-react";
+import { ArrowRight, ArrowLeft, Upload, CheckCircle2, ShieldCheck, Eye, EyeOff, Loader2, GraduationCap, Save, X } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
@@ -29,14 +29,81 @@ export default function RegisterPage() {
     about: "", diet: "", smoking: "", drinking: "",
     familyType: "", fatherOccupation: "", motherOccupation: "", siblings: "",
     prefMinAge: "", prefMaxAge: "", prefReligion: "", prefLocation: "",
+    avatarUrl: "",
   });
+  
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
+  useEffect(() => {
+    const draft = localStorage.getItem('jodibanao_register_draft');
+    if (draft) {
+      toast("Found a saved draft", {
+        action: {
+          label: "Resume",
+          onClick: () => {
+            const parsed = JSON.parse(draft);
+            setFormData(parsed.formData);
+            setStep(parsed.step);
+          }
+        },
+        duration: 10000
+      });
+    }
+  }, []);
+
+  const handleSaveDraft = () => {
+    localStorage.setItem('jodibanao_register_draft', JSON.stringify({ formData, step }));
+    toast.success("Draft saved successfully!");
+  };
 
   const updateForm = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("File size must be under 5MB");
+      return;
+    }
+
+    setPhotoFile(file);
+    setPhotoPreview(URL.createObjectURL(file));
+  };
+
+  const removePhoto = () => {
+    setPhotoFile(null);
+    setPhotoPreview(null);
+    updateForm("avatarUrl", "");
+  };
+
+  const uploadPhotoToSupabase = async (): Promise<string> => {
+    if (!photoFile) return "";
+    setIsUploading(true);
+    const supabase = createClient();
+    const fileExt = photoFile.name.split('.').pop();
+    const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
+    const filePath = `${fileName}`;
+
+    const { error: uploadError, data } = await supabase.storage
+      .from('avatars')
+      .upload(filePath, photoFile);
+
+    setIsUploading(false);
+    if (uploadError) {
+      throw uploadError;
+    }
+
+    const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
+    return publicUrlData.publicUrl;
   };
 
   const handleRegister = async () => {
@@ -46,11 +113,28 @@ export default function RegisterPage() {
       setStep(1);
       return;
     }
+    
+    const consentCb = document.getElementById('consent') as HTMLInputElement;
+    if (!consentCb?.checked) {
+      toast.error("Please agree to the privacy policy and terms.");
+      return;
+    }
 
     try {
       setIsLoading(true);
       setError("");
       setSuccess("");
+
+      let uploadedUrl = formData.avatarUrl;
+      if (photoFile) {
+        try {
+          uploadedUrl = await uploadPhotoToSupabase();
+        } catch (uploadErr) {
+          toast.error("Failed to upload photo. Proceeding without photo.");
+        }
+      }
+
+      const payload = { ...formData, avatarUrl: uploadedUrl };
 
       // 1. Call server API to register user (auto-confirmed without email verification)
       const res = await fetch("/api/auth/register", {
@@ -58,7 +142,7 @@ export default function RegisterPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       });
 
       const result = await res.json();
@@ -78,6 +162,7 @@ export default function RegisterPage() {
         throw signInError;
       }
 
+      localStorage.removeItem('jodibanao_register_draft');
       toast.success("Welcome to Jodibanao! Your account is ready.");
       router.push("/dashboard");
       router.refresh();
@@ -107,6 +192,10 @@ export default function RegisterPage() {
 
   // Step indicator
   const progressPercentage = ((step - 1) / (totalSteps - 1)) * 100;
+  
+  const stepTooltips = [
+    "Basic Info", "Background", "Career", "Lifestyle", "Family", "Preferences", "Photos"
+  ];
 
   return (
     <div className="min-h-screen bg-muted/40 py-12 px-4 relative flex flex-col justify-center">
@@ -130,9 +219,29 @@ export default function RegisterPage() {
           <p className="text-muted-foreground">It takes just 5 minutes to set up your perfect match profile.</p>
         </div>
 
-        {/* Progress Bar */}
+        {/* Progress Bar & Dots */}
         <div className="mb-8">
-          <div className="flex justify-between text-xs font-semibold text-muted-foreground mb-2 px-1">
+          <div className="flex justify-between items-center mb-3 px-2 relative z-10">
+            {Array.from({ length: totalSteps }).map((_, i) => (
+              <div key={i} className="flex flex-col items-center group relative">
+                <button
+                  type="button"
+                  onClick={() => i + 1 < step && setStep(i + 1)}
+                  disabled={i + 1 > step}
+                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors shadow-sm
+                    ${i + 1 === step ? 'bg-primary text-white border-2 border-primary/20 ring-4 ring-primary/10' : 
+                      i + 1 < step ? 'bg-primary/20 text-primary cursor-pointer hover:bg-primary/30' : 
+                      'bg-muted text-muted-foreground cursor-not-allowed'}`}
+                >
+                  {i + 1 < step ? <CheckCircle2 className="w-4 h-4" /> : i + 1}
+                </button>
+                <span className="absolute -bottom-6 text-[10px] font-medium text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                  {stepTooltips[i]}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-between text-xs font-semibold text-muted-foreground mb-2 px-1 mt-6">
             <span>Step {step} of {totalSteps}</span>
             <span>{Math.round(progressPercentage)}% completed</span>
           </div>
@@ -146,24 +255,28 @@ export default function RegisterPage() {
 
         <Card className="border-border shadow-xl">
           <CardHeader className="bg-muted/10 border-b border-border pb-6 pt-8 px-8">
-            <CardTitle className="text-2xl font-serif">
-              {step === 1 && "Basic Information"}
-              {step === 2 && "Background Details"}
-              {step === 3 && "Education & Career"}
-              {step === 4 && "About & Lifestyle"}
-              {step === 5 && "Family Details"}
-              {step === 6 && "Partner Preferences"}
-              {step === 7 && "Profile Photos"}
-            </CardTitle>
-            <CardDescription className="text-base mt-2">
-              {step === 1 && "Let's start with your basics. Membership details are required to join."}
-              {step === 2 && "Tell us about your background."}
-              {step === 3 && "Where do you work and what did you study?"}
-              {step === 4 && "Describe yourself and your habits."}
-              {step === 5 && "Information about your immediate family."}
-              {step === 6 && "What qualities are you looking for?"}
-              {step === 7 && "Add photos to complete your profile. Photos are blurred until you connect."}
-            </CardDescription>
+            <div className="flex justify-between items-start">
+              <div>
+                <CardTitle className="text-2xl font-serif">
+                  {step === 1 && "Basic Information"}
+                  {step === 2 && "Background Details"}
+                  {step === 3 && "Education & Career"}
+                  {step === 4 && "About & Lifestyle"}
+                  {step === 5 && "Family Details"}
+                  {step === 6 && "Partner Preferences"}
+                  {step === 7 && "Profile Photos"}
+                </CardTitle>
+                <CardDescription className="text-base mt-2">
+                  {step === 1 && "Let's start with your basics. Membership details are required to join."}
+                  {step === 2 && "Tell us about your background."}
+                  {step === 3 && "Where do you work and what did you study?"}
+                  {step === 4 && "Describe yourself and your habits."}
+                  {step === 5 && "Information about your immediate family."}
+                  {step === 6 && "What qualities are you looking for?"}
+                  {step === 7 && "Add photos to complete your profile. Photos are blurred until you connect."}
+                </CardDescription>
+              </div>
+            </div>
           </CardHeader>
 
           <CardContent className="p-8">
@@ -563,16 +676,35 @@ export default function RegisterPage() {
                     <p className="text-sm text-muted-foreground">Your photos will be blurred by default. You control who sees your photo — everyone, only mutual matches, or only verified professionals.</p>
                   </div>
 
-                  <div className="border-2 border-dashed border-border rounded-xl p-10 flex flex-col items-center justify-center bg-card hover:bg-muted/50 cursor-pointer transition-colors text-center">
-                    <Upload className="w-10 h-10 text-muted-foreground mb-4" />
-                    <h4 className="font-semibold text-foreground mb-1">Upload Profile Photo</h4>
-                    <p className="text-sm text-muted-foreground mb-4">You can upload a photo after registration from your profile page.</p>
-                    <p className="text-xs text-muted-foreground">JPEG, PNG up to 5MB</p>
-                  </div>
+                  {!photoPreview ? (
+                    <div className="relative border-2 border-dashed border-border rounded-xl p-10 flex flex-col items-center justify-center bg-card hover:bg-muted/50 cursor-pointer transition-colors text-center overflow-hidden">
+                      <input 
+                        type="file" 
+                        accept="image/jpeg, image/png" 
+                        onChange={handlePhotoUpload} 
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      />
+                      <Upload className="w-10 h-10 text-muted-foreground mb-4" />
+                      <h4 className="font-semibold text-foreground mb-1">Upload Profile Photo</h4>
+                      <p className="text-sm text-muted-foreground mb-4">Select an image to upload now, or add one later.</p>
+                      <p className="text-xs text-muted-foreground">JPEG, PNG up to 5MB</p>
+                    </div>
+                  ) : (
+                    <div className="relative w-48 h-48 mx-auto rounded-xl overflow-hidden border border-border shadow-md">
+                      <img src={photoPreview} alt="Preview" className="w-full h-full object-cover" />
+                      <button 
+                        type="button" 
+                        onClick={removePhoto} 
+                        className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1 hover:bg-destructive transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
 
                   <div className="flex items-start space-x-2 pt-2">
                     <input type="checkbox" id="consent" className="mt-1" />
-                    <Label htmlFor="consent" className="text-xs font-normal text-muted-foreground leading-relaxed">
+                    <Label htmlFor="consent" className="text-xs font-normal text-muted-foreground leading-relaxed cursor-pointer">
                       I agree to the Privacy Policy and terms. I confirm that I am a CA/CS professional or student, at least 18 years old, and legally permitted to use this service.
                     </Label>
                   </div>
@@ -581,16 +713,27 @@ export default function RegisterPage() {
             </form>
           </CardContent>
 
-          <CardFooter className="flex justify-between p-8 pt-0 border-t border-border mt-2 pt-6">
-            <Button
-              variant="outline"
-              onClick={prevStep}
-              disabled={step === 1}
-              className="px-6 border-border hover:bg-muted hover:text-foreground"
-            >
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
+          <CardFooter className="flex justify-between items-center p-8 pt-0 border-t border-border mt-2 pt-6">
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={prevStep}
+                disabled={step === 1}
+                className="px-6 border-border hover:bg-muted hover:text-foreground"
+              >
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={handleSaveDraft}
+                className="text-muted-foreground hover:text-foreground"
+                title="Save draft"
+              >
+                <Save className="w-4 h-4 mr-2" />
+                Save
+              </Button>
+            </div>
 
             {step < totalSteps ? (
               <Button
@@ -603,12 +746,12 @@ export default function RegisterPage() {
             ) : (
               <Button
                 onClick={handleRegister}
-                disabled={isLoading}
+                disabled={isLoading || isUploading}
                 className="px-8 bg-secondary hover:bg-secondary/90 text-white flex gap-2 shadow-md w-auto"
               >
-                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                Complete Registration
-                {!isLoading && <CheckCircle2 className="w-4 h-4" />}
+                {(isLoading || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {isUploading ? "Uploading..." : "Complete Registration"}
+                {!(isLoading || isUploading) && <CheckCircle2 className="w-4 h-4" />}
               </Button>
             )}
           </CardFooter>

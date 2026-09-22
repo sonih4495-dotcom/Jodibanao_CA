@@ -6,20 +6,22 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { User, Heart, MessageCircle, Star, Settings, Bell, ShieldCheck, ChevronRight, Activity, ArrowRight, Loader2, PartyPopper, GraduationCap } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { User, Heart, MessageCircle, Star, Settings, Bell, ShieldCheck, ChevronRight, Activity, ArrowRight, Loader2, PartyPopper, Inbox, Send } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { createClient } from "@/utils/supabase/client";
 import { calculateMatchScore } from "@/utils/matchScore";
 import { toast } from "sonner";
-
+import { ProfileCompletion } from "@/components/ui/profile-completion";
+import { SkeletonProfileGrid } from "@/components/ui/skeleton-profile-card";
 
 export default function DashboardPage() {
   const supabase = createClient();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState("overview");
   
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [incomingInterests, setIncomingInterests] = useState<any[]>([]);
+  const [sentInterests, setSentInterests] = useState<any[]>([]);
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -38,8 +40,8 @@ export default function DashboardPage() {
         
       setCurrentUser(userProfile);
 
-      // 1. Fetch Incoming Pending Interests
-      const { data: interests } = await supabase
+      // Fetch Incoming Pending Interests
+      const { data: incoming } = await supabase
         .from('interests')
         .select(`
           *,
@@ -49,18 +51,37 @@ export default function DashboardPage() {
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
 
-      if (interests) setIncomingInterests(interests);
+      if (incoming) setIncomingInterests(incoming);
 
-      // 2. Fetch Recommendations (profiles excluding me and excluding pending/accepted interactions)
-      // For simplicity, we fetch a few profiles and score them
+      // Fetch Sent Interests
+      const { data: sent } = await supabase
+        .from('interests')
+        .select(`
+          *,
+          receiver:profiles!interests_to_user_id_fkey(*)
+        `)
+        .eq('from_user_id', session.user.id)
+        .order('created_at', { ascending: false });
+
+      if (sent) setSentInterests(sent);
+
+      // Fetch Recommendations
       const { data: allProfiles } = await supabase
         .from('profiles')
         .select('*')
         .neq('id', session.user.id)
-        .limit(10);
+        .limit(15);
         
       if (allProfiles && userProfile) {
-        const scored = allProfiles.map(p => {
+        // filter out profiles I already sent interests to or received from
+        const interactedIds = new Set([
+          ...(incoming || []).map(i => i.from_user_id),
+          ...(sent || []).map(i => i.to_user_id)
+        ]);
+
+        const available = allProfiles.filter(p => !interactedIds.has(p.id));
+
+        const scored = available.map(p => {
           let age = 25;
           if (p.dob) age = new Date().getFullYear() - new Date(p.dob).getFullYear();
           return { ...p, calculatedScore: calculateMatchScore(userProfile, p), age };
@@ -71,17 +92,15 @@ export default function DashboardPage() {
       setLoading(false);
     }
     loadDashboard();
-  }, []);
+  }, [supabase]);
 
   const handleInterest = async (interestId: string, action: 'accepted' | 'declined', senderName: string) => {
-    // Prevent trigger failures if the user data is empty
     if (action === 'accepted' && (!currentUser.first_name || currentUser.first_name.trim() === '')) {
       toast.warning("Please complete your profile (add your First Name) before accepting interests.");
       router.push("/profile/edit?highlight=missing");
       return;
     }
 
-    // Optimistic UI update
     setIncomingInterests(prev => prev.filter(i => i.id !== interestId));
 
     const { error } = await supabase
@@ -90,9 +109,8 @@ export default function DashboardPage() {
       .eq('id', interestId);
 
     if (action === 'accepted' && !error) {
-      // Trigger confetti and celebration UI
       setMutualMatchTrigger(senderName);
-      setTimeout(() => setMutualMatchTrigger(null), 5000); // clear after 5s
+      setTimeout(() => setMutualMatchTrigger(null), 5000);
     } else if (action === 'declined') {
       toast.info("Interest declined.");
     } else if (error) {
@@ -100,24 +118,43 @@ export default function DashboardPage() {
     }
   };
 
+  const handleSendInterest = async (toUserId: string) => {
+    if (!currentUser) return;
+    const { error } = await supabase.from('interests').insert({
+      from_user_id: currentUser.id,
+      to_user_id: toUserId,
+      status: 'pending'
+    });
+    
+    if (error) {
+      toast.error('Failed to send interest.');
+    } else {
+      toast.success('Interest sent successfully!');
+      setRecommendations(prev => prev.filter(r => r.id !== toUserId));
+      
+      const newSent = {
+        id: Math.random().toString(),
+        to_user_id: toUserId,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        receiver: recommendations.find(r => r.id === toUserId)
+      };
+      setSentInterests(prev => [newSent, ...prev]);
+    }
+  };
+
   if (loading) {
     return (
-      <div className="bg-muted/20 min-h-screen flex flex-col">
-        <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="w-10 h-10 animate-spin text-primary" />
+      <div className="bg-muted/20 min-h-screen flex flex-col pt-12">
+        <div className="container mx-auto px-4 max-w-6xl">
+          <SkeletonProfileGrid count={3} />
         </div>
       </div>
     );
   }
 
-  const coreFields = ['avatar_url', 'about_me', 'education', 'profession', 'income', 'city', 'diet', 'smoking', 'drinking'];
-  const filledFields = coreFields.filter(f => currentUser?.[f]).length;
-  const profileCompletePercent = currentUser ? Math.round((filledFields / coreFields.length) * 100) : 0;
-
   return (
-    <div className="bg-muted/20 min-h-screen flex flex-col">
-      
-      {/* Mutual Match Celebration Overlay */}
+    <div className="bg-muted/20 min-h-screen flex flex-col pb-12">
       {mutualMatchTrigger && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="text-center animate-in zoom-in duration-500 delay-100 flex flex-col items-center">
@@ -140,8 +177,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Top Welcome Banner */}
-      <div className="bg-primary text-white py-12 px-4 shadow-sm relative overflow-hidden">
+      {/* Top Banner */}
+      <div className="bg-primary text-white py-12 px-4 shadow-sm relative overflow-hidden mb-8">
         <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl" />
         <div className="container mx-auto max-w-6xl relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-6">
@@ -155,33 +192,20 @@ export default function DashboardPage() {
               </p>
             </div>
           </div>
-          <Link href="/profile/edit?highlight=missing" className="bg-white/10 backdrop-blur-md border border-white/20 p-4 rounded-xl w-full md:w-64 text-center hidden md:block hover:bg-white/20 transition-colors group cursor-pointer">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-semibold uppercase tracking-wider opacity-90">Profile Completion</p>
-              <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-2 group-hover:translate-x-0" />
-            </div>
-            <div className="h-2 bg-white/20 rounded-full overflow-hidden mb-2">
-              <div 
-                className="h-full bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-1000" 
-                style={{ width: `${profileCompletePercent}%` }}
-              />
-            </div>
-            <p className="text-xs font-bold text-left">{profileCompletePercent}% Complete <span className="font-normal opacity-80 ml-1">(Click to complete)</span></p>
-          </Link>
         </div>
       </div>
 
-      <div className="container mx-auto px-4 max-w-6xl py-8 flex flex-col lg:flex-row gap-8 flex-1">
+      <div className="container mx-auto px-4 max-w-6xl flex flex-col lg:flex-row gap-8">
         
         {/* Sidebar Nav */}
-        <div className="w-full lg:w-64 shrink-0">
+        <div className="w-full lg:w-64 shrink-0 space-y-6">
           <div className="bg-white rounded-2xl shadow-sm border border-border p-4 flex flex-col gap-1 sticky top-24">
             <Link href="/dashboard" className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium rounded-xl transition-all bg-primary/10 text-primary hover:bg-primary/15">
               <div className="flex items-center gap-3"><Activity className="w-5 h-5" /> Dashboard Overview</div>
               <ChevronRight className="w-4 h-4 opacity-50" />
             </Link>
-            <Link href="/browse" className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium rounded-xl transition-all text-muted-foreground hover:bg-muted/50 hover:text-foreground">
-              <div className="flex items-center gap-3"><Star className="w-5 h-5" /> Browse Profiles</div>
+            <Link href="/discover" className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium rounded-xl transition-all text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+              <div className="flex items-center gap-3"><Heart className="w-5 h-5" /> Discover Matches</div>
               <ChevronRight className="w-4 h-4 opacity-50" />
             </Link>
             <Link href="/messages" className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium rounded-xl transition-all text-muted-foreground hover:bg-muted/50 hover:text-foreground">
@@ -192,107 +216,173 @@ export default function DashboardPage() {
               <div className="flex items-center gap-3"><User className="w-5 h-5" /> Edit Profile</div>
               <ChevronRight className="w-4 h-4 opacity-50" />
             </Link>
-            <Link href="/membership" className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium rounded-xl transition-all text-muted-foreground hover:bg-muted/50 hover:text-foreground">
-              <div className="flex items-center gap-3"><ShieldCheck className="w-5 h-5" /> Membership</div>
-              <ChevronRight className="w-4 h-4 opacity-50" />
-            </Link>
           </div>
         </div>
 
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col gap-8">
           
-          {/* Incoming Interests Panel */}
+          <ProfileCompletion profile={currentUser} />
+
+          {/* Interests Tabs */}
           <div className="bg-white rounded-2xl shadow-sm border border-border p-6 md:p-8">
-            <h2 className="text-xl font-serif font-bold text-foreground mb-6 flex items-center gap-2">
-              <Bell className="w-5 h-5 text-primary" /> Pending Interests ({incomingInterests.length})
-            </h2>
-            
-            {incomingInterests.length === 0 ? (
-              <div className="text-center py-8 bg-muted/30 rounded-xl border border-dashed border-border">
-                <p className="text-muted-foreground">You have no pending interest requests at the moment.</p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-4">
-                {incomingInterests.map((interest) => (
-                  <div key={interest.id} className="flex flex-col sm:flex-row items-center sm:items-start gap-4 p-4 rounded-xl border border-border hover:bg-muted/30 transition-colors">
-                    <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20 overflow-hidden relative">
-                       {/* Blur logic if not premium, simplified for now */}
-                       <ShieldCheck className="w-8 h-8 text-primary/50" />
+            <Tabs defaultValue="incoming" className="w-full">
+              <TabsList className="mb-6 grid w-full max-w-md grid-cols-2">
+                <TabsTrigger value="incoming" className="flex gap-2">
+                  <Inbox className="w-4 h-4" /> Incoming ({incomingInterests.length})
+                </TabsTrigger>
+                <TabsTrigger value="sent" className="flex gap-2">
+                  <Send className="w-4 h-4" /> Sent ({sentInterests.length})
+                </TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="incoming">
+                {incomingInterests.length === 0 ? (
+                  <div className="text-center py-12 bg-muted/30 rounded-xl border border-dashed border-border flex flex-col items-center">
+                    <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+                      <Inbox className="w-8 h-8 text-primary/60" />
                     </div>
-                    <div className="flex-1 text-center sm:text-left">
-                      <h4 className="font-semibold text-lg mb-1">{interest.sender?.first_name} {interest.sender?.last_name}</h4>
-                      <p className="text-sm text-muted-foreground mb-3">
-                        {interest.sender?.city} • {interest.sender?.profession || "Professional"}
-                      </p>
-                      <div className="flex gap-2 justify-center sm:justify-start">
-                        <Button 
-                          onClick={() => handleInterest(interest.id, 'accepted', interest.sender?.first_name || 'User')}
-                          className="bg-green-600 hover:bg-green-700 text-white h-9 px-6"
-                        >
-                          Accept
-                        </Button>
-                        <Button 
-                          onClick={() => handleInterest(interest.id, 'declined', "User")}
-                          variant="outline" 
-                          className="h-9 px-6 hover:bg-destructive/10 hover:text-destructive"
-                        >
-                          Decline
-                        </Button>
-                      </div>
-                    </div>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap mt-2 sm:mt-0">
-                      {new Date(interest.created_at).toLocaleDateString()}
-                    </span>
+                    <h3 className="text-lg font-bold mb-2">No Incoming Interests</h3>
+                    <p className="text-muted-foreground max-w-sm">When someone sends you an interest, it will appear here. Enhance your profile to get more matches!</p>
                   </div>
-                ))}
-              </div>
-            )}
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {incomingInterests.map((interest) => (
+                      <div key={interest.id} className="flex flex-col sm:flex-row items-center sm:items-start gap-4 p-4 rounded-xl border border-border hover:bg-muted/30 transition-colors">
+                        <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20 overflow-hidden relative">
+                           <ShieldCheck className="w-8 h-8 text-primary/50" />
+                        </div>
+                        <div className="flex-1 text-center sm:text-left">
+                          <h4 className="font-semibold text-lg mb-1">{interest.sender?.first_name} {interest.sender?.last_name}</h4>
+                          <p className="text-sm text-muted-foreground mb-3">
+                            {interest.sender?.city} • {interest.sender?.profession || "Professional"}
+                          </p>
+                          <div className="flex gap-2 justify-center sm:justify-start">
+                            <Button 
+                              onClick={() => handleInterest(interest.id, 'accepted', interest.sender?.first_name || 'User')}
+                              className="bg-green-600 hover:bg-green-700 text-white h-9 px-6"
+                            >
+                              Accept
+                            </Button>
+                            <Button 
+                              onClick={() => handleInterest(interest.id, 'declined', "User")}
+                              variant="outline" 
+                              className="h-9 px-6 hover:bg-destructive/10 hover:text-destructive"
+                            >
+                              Decline
+                            </Button>
+                          </div>
+                        </div>
+                        <span className="text-xs text-muted-foreground whitespace-nowrap mt-2 sm:mt-0">
+                          {new Date(interest.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+              
+              <TabsContent value="sent">
+                {sentInterests.length === 0 ? (
+                  <div className="text-center py-12 bg-muted/30 rounded-xl border border-dashed border-border flex flex-col items-center">
+                    <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+                      <Send className="w-8 h-8 text-primary/60" />
+                    </div>
+                    <h3 className="text-lg font-bold mb-2">No Sent Interests</h3>
+                    <p className="text-muted-foreground max-w-sm">You haven't sent any interests yet. Check out the Discover page to find potential matches.</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {sentInterests.map((interest) => (
+                      <div key={interest.id} className="flex flex-col sm:flex-row items-center sm:items-start gap-4 p-4 rounded-xl border border-border hover:bg-muted/30 transition-colors">
+                        <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20 overflow-hidden relative">
+                           <ShieldCheck className="w-8 h-8 text-primary/50" />
+                        </div>
+                        <div className="flex-1 text-center sm:text-left">
+                          <h4 className="font-semibold text-lg mb-1">{interest.receiver?.first_name} {interest.receiver?.last_name}</h4>
+                          <p className="text-sm text-muted-foreground mb-3">
+                            {interest.receiver?.city} • {interest.receiver?.profession || "Professional"}
+                          </p>
+                          <Badge variant="outline" className={`
+                            ${interest.status === 'accepted' ? 'bg-green-100 text-green-700' : ''}
+                            ${interest.status === 'declined' ? 'bg-red-100 text-red-700' : ''}
+                            ${interest.status === 'pending' ? 'bg-yellow-100 text-yellow-700' : ''}
+                          `}>
+                            {interest.status.charAt(0).toUpperCase() + interest.status.slice(1)}
+                          </Badge>
+                        </div>
+                        <span className="text-xs text-muted-foreground whitespace-nowrap mt-2 sm:mt-0">
+                          {new Date(interest.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
           </div>
 
           {/* Daily Recommendations */}
           <div>
             <div className="flex justify-between items-end mb-6">
               <h2 className="text-2xl font-serif font-bold text-foreground">Daily Recommendations</h2>
-              <Link href="/browse" className="text-sm text-primary font-semibold hover:underline flex items-center gap-1">
-                View All Matches <ChevronRight className="w-4 h-4" />
+              <Link href="/discover" className="text-sm text-primary font-semibold hover:underline flex items-center gap-1">
+                Discover More <ChevronRight className="w-4 h-4" />
               </Link>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-              {recommendations.map((rec) => (
-                <Card key={rec.id} className="overflow-hidden group border-border shadow-sm hover:shadow-md transition-all hover:-translate-y-1">
-                  <div className="aspect-[4/3] relative bg-muted overflow-hidden">
-                    <Badge className="absolute top-3 left-3 z-10 bg-gradient-to-r from-pink-500 to-rose-500 text-white border-0 shadow-sm font-medium">
-                      {rec.calculatedScore}% Match
-                    </Badge>
-                    <div className="absolute inset-0 z-0 bg-gradient-to-tr from-primary/30 to-secondary/30 backdrop-blur-2xl flex items-center justify-center">
-                       <ShieldCheck className="w-12 h-12 text-foreground/20 opacity-50" />
-                    </div>
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 pointer-events-none">
-                      <h3 className="text-white font-serif font-bold text-lg mb-0.5">{rec.first_name}, {rec.age}</h3>
-                      <p className="text-white/80 text-xs">{rec.education || 'Graduate'} • {rec.city}</p>
-                    </div>
+            {recommendations.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center p-8 mt-12 bg-white rounded-3xl border border-border shadow-sm">
+                  <div className="w-16 h-16 rounded-full bg-secondary/10 flex items-center justify-center mb-4">
+                    <Star className="w-8 h-8 text-secondary" />
                   </div>
-                  <CardContent className="p-4 bg-card flex flex-col gap-3">
-                    <div className="flex justify-between items-center text-sm font-medium">
-                      <span className="text-muted-foreground">Profession</span>
-                      <span className="truncate max-w-[120px] text-right">{rec.profession || "Not specified"}</span>
-                    </div>
-                    <Separator />
-                    <div className="flex justify-between items-center text-sm font-medium">
-                      <span className="text-muted-foreground">Community</span>
-                      <span>{rec.religion || "Any"}</span>
-                    </div>
-                    <div className="grid grid-cols-1 mt-2">
-                       <Link href="/browse">
-                         <Button className="w-full text-xs h-9 bg-primary hover:bg-primary-hover">Send Interest</Button>
-                       </Link>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+                  <h3 className="text-xl font-bold mb-2">Caught up for now!</h3>
+                  <p className="text-muted-foreground mb-6 max-w-sm">We'll find more recommendations for you soon. Try updating your preferences.</p>
+                  <Link href="/profile/edit">
+                    <Button variant="outline">Update Preferences</Button>
+                  </Link>
+                </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                {recommendations.map((rec) => (
+                  <Card key={rec.id} className="overflow-hidden group border-border shadow-sm hover:shadow-md transition-all hover:-translate-y-1 flex flex-col">
+                    <Link href={`/profile/${rec.id}`} className="block">
+                      <div className="aspect-[4/3] relative bg-muted overflow-hidden">
+                        <Badge className="absolute top-3 left-3 z-10 bg-gradient-to-r from-pink-500 to-rose-500 text-white border-0 shadow-sm font-medium">
+                          {rec.calculatedScore}% Match
+                        </Badge>
+                        <div className="absolute inset-0 z-0 bg-gradient-to-tr from-primary/30 to-secondary/30 backdrop-blur-2xl flex items-center justify-center">
+                           <ShieldCheck className="w-12 h-12 text-foreground/20 opacity-50" />
+                        </div>
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 pointer-events-none">
+                          <h3 className="text-white font-serif font-bold text-lg mb-0.5">{rec.first_name}, {rec.age}</h3>
+                          <p className="text-white/80 text-xs">{rec.education || 'Graduate'} • {rec.city}</p>
+                        </div>
+                      </div>
+                    </Link>
+                    <CardContent className="p-4 bg-card flex flex-col gap-3 flex-1">
+                      <div className="flex justify-between items-center text-sm font-medium">
+                        <span className="text-muted-foreground">Profession</span>
+                        <span className="truncate max-w-[120px] text-right">{rec.profession || "Not specified"}</span>
+                      </div>
+                      <Separator />
+                      <div className="flex justify-between items-center text-sm font-medium">
+                        <span className="text-muted-foreground">Community</span>
+                        <span>{rec.religion || "Any"}</span>
+                      </div>
+                      <div className="mt-auto pt-4">
+                         <Button 
+                           onClick={() => handleSendInterest(rec.id)}
+                           className="w-full text-xs h-9 bg-primary hover:bg-primary-hover flex gap-2 items-center"
+                         >
+                           <Heart className="w-4 h-4" /> Send Interest
+                         </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
           
         </div>

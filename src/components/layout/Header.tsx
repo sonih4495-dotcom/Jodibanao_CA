@@ -39,12 +39,19 @@ export function Header() {
     router.refresh(); // Force a re-render so server components see the missing session
   };
 
-  const navigation = [
-    { name: "Home", href: user ? "/dashboard" : "/" },
-    { name: "Browse Profiles", href: "/browse" },
-    { name: "Success Stories", href: "/success-stories" },
-    { name: "Pricing", href: "/membership" },
-  ];
+  const navigation = user 
+    ? [
+        { name: "Dashboard", href: "/dashboard" },
+        { name: "Browse", href: "/browse" },
+        { name: "Discover", href: "/discover" },
+        { name: "Messages", href: "/messages" },
+      ]
+    : [
+        { name: "Home", href: "/" },
+        { name: "Browse Profiles", href: "/browse" },
+        { name: "How It Works", href: "/#how-it-works" },
+        { name: "Success Stories", href: "/success-stories" },
+      ];
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">

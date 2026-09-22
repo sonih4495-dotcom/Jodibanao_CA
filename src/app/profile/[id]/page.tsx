@@ -1,363 +1,484 @@
 "use client";
 
-import { useState, use } from "react";
+import { useEffect, useState, Suspense } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { createClient } from "@/utils/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ShieldAlert, ShieldCheck, Heart, MessageCircle, Star, Ban, Copy, MapPin, GraduationCap, Briefcase, HeartHandshake, Eye } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Heart, MessageCircle, ShieldCheck, GraduationCap, MapPin, Briefcase,
+  User, Flag, ArrowLeft, Loader2, CheckCircle2, Lock, Share2, BookmarkPlus,
+  Calendar, Users, Utensils, Home, Star, MoreVertical, ShieldAlert
+} from "lucide-react";
+import { toast } from "sonner";
+import { ReportDialog } from "@/components/safety/ReportDialog";
 
-export default function ProfilePage({ params }: { params: Promise<{ id: string }> }) {
-  // Use React.use() to unwrap params in Next.js 15+ App Router
-  const resolvedParams = use(params);
-  const profileId = resolvedParams.id;
-  
-  const [interestSent, setInterestSent] = useState(false);
+function ProfileDetailContent() {
+  const params = useParams();
+  const router = useRouter();
+  const profileId = params?.id as string;
+  const supabase = createClient();
+
+  const [profile, setProfile] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
+  const [interestStatus, setInterestStatus] = useState<"none" | "sent" | "received" | "accepted" | "mutual">("none");
   const [isSaved, setIsSaved] = useState(false);
-  const [isMutualMatch, setIsMutualMatch] = useState(profileId === "1001" || profileId === "1005"); // Mock mutual matching
-  const [photosRevealed, setPhotosRevealed] = useState(isMutualMatch);
+  const [loading, setLoading] = useState(true);
+  const [sendingInterest, setSendingInterest] = useState(false);
+  const [photoBlurred, setPhotoBlurred] = useState(true);
+  
+  // Report and Block State
+  const [reportDialogOpen, setReportDialogOpen] = useState(false);
 
-  const reqPhotoUnlock = () => {
-    alert("Request to reveal photos sent. Users must accept your interest before photos are revealed.");
+  useEffect(() => {
+    if (!profileId) return;
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.push("/login");
+        return;
+      }
+      setCurrentUser(session.user);
+
+      // Fetch the profile being viewed
+      const { data: profileData, error: profileError } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", profileId)
+        .maybeSingle();
+
+      if (profileError || !profileData) {
+        toast.error("Profile not found.");
+        router.push("/browse");
+        return;
+      }
+      setProfile(profileData);
+
+      // Fetch current user's profile
+      const { data: myProfile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .maybeSingle();
+      setCurrentUserProfile(myProfile);
+
+      // Check interest status
+      // Did I send interest to them?
+      const { data: sentInterest } = await supabase
+        .from("interests")
+        .select("id, status")
+        .eq("from_user_id", session.user.id)
+        .eq("to_user_id", profileId)
+        .maybeSingle();
+
+      // Did they send interest to me?
+      const { data: receivedInterest } = await supabase
+        .from("interests")
+        .select("id, status")
+        .eq("from_user_id", profileId)
+        .eq("to_user_id", session.user.id)
+        .maybeSingle();
+
+      // Determine mutual match
+      const isMutual = sentInterest?.status === "accepted" && receivedInterest?.status === "accepted";
+      if (isMutual) {
+        setInterestStatus("mutual");
+      } else if (sentInterest?.status === "accepted") {
+        setInterestStatus("accepted");
+      } else if (sentInterest) {
+        setInterestStatus("sent");
+      } else if (receivedInterest) {
+        setInterestStatus("received");
+      } else {
+        setInterestStatus("none");
+      }
+
+      // Photo visibility
+      if (profileData.photo_visibility === "everyone") {
+        setPhotoBlurred(false);
+      } else if (profileData.photo_visibility === "mutual" && isMutual) {
+        setPhotoBlurred(false);
+      } else if (profileData.photo_visibility === "verified_only" && myProfile?.is_verified) {
+        setPhotoBlurred(false);
+      } else {
+        setPhotoBlurred(true);
+      }
+
+      // Log profile view (don't await — fire and forget)
+      supabase.from("profile_views").insert({
+        viewer_id: session.user.id,
+        viewed_id: profileId,
+      }).then(() => {});
+
+      setLoading(false);
+    };
+    init();
+  }, [profileId]);
+
+  const handleSendInterest = async () => {
+    if (!currentUser || interestStatus !== "none") return;
+    setSendingInterest(true);
+    try {
+      const { error } = await supabase.from("interests").insert({
+        from_user_id: currentUser.id,
+        to_user_id: profileId,
+        status: "pending",
+      });
+      if (error) throw error;
+
+      // Create notification for the recipient
+      await supabase.from("notifications").insert({
+        user_id: profileId,
+        type: "interest_received",
+        title: "Someone sent you an interest!",
+        message: `${currentUserProfile?.first_name || "Someone"} is interested in your profile.`,
+        from_user_id: currentUser.id,
+      });
+
+      setInterestStatus("sent");
+      toast.success("Interest sent successfully!");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to send interest.");
+    } finally {
+      setSendingInterest(false);
+    }
+  };
+
+  const handleBlockUser = async () => {
+    if (!currentUser) return;
+    if (!confirm("Are you sure you want to block this user? They will no longer be able to contact you.")) return;
+    
+    try {
+      const { error } = await supabase.from("blocked_users").insert({
+        blocker_id: currentUser.id,
+        blocked_id: profileId,
+      });
+      if (error) throw error;
+      toast.success("User blocked.");
+      router.push("/browse");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to block user.");
+    }
+  };
+
+  const handleShare = () => {
+    navigator.clipboard?.writeText(window.location.href);
+    toast.success("Profile link copied!");
+  };
+
+  const calculateAge = (dob: string) => {
+    if (!dob) return null;
+    const birth = new Date(dob);
+    const today = new Date();
+    let age = today.getFullYear() - birth.getFullYear();
+    const m = today.getMonth() - birth.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
+    return age;
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <Loader2 className="w-10 h-10 animate-spin text-primary mx-auto mb-3" />
+          <p className="text-muted-foreground text-sm">Loading profile...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!profile) return null;
+
+  const age = calculateAge(profile.dob);
+  const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(" ") || "Member";
+  const initials = (profile.first_name?.[0] || "") + (profile.last_name?.[0] || "");
+
+  const InfoRow = ({ icon: Icon, label, value }: { icon: any; label: string; value?: string | null }) => {
+    if (!value) return null;
+    return (
+      <div className="flex items-start gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+          <Icon className="w-4 h-4 text-primary" />
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="text-sm font-medium text-foreground">{value}</p>
+        </div>
+      </div>
+    );
   };
 
   return (
-    <div className="bg-muted/20 min-h-[calc(100vh-80px)] py-8">
-      <div className="container mx-auto px-4 max-w-5xl">
-
-        {/* Mutual Match Banner */}
-        {isMutualMatch && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6 flex flex-col md:flex-row items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600">
-                <HeartHandshake className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="text-green-800 font-bold font-serif text-lg">It&apos;s a Mutual Match!</h3>
-                <p className="text-green-700 text-sm">You both have liked each other. Photos are now unlocked.</p>
-              </div>
-            </div>
-            <Button className="mt-4 md:mt-0 bg-green-600 hover:bg-green-700 text-white shrink-0 shadow-sm leading-tight flex items-center gap-2">
-              <MessageCircle className="w-4 h-4" />
-              Chat Now
+    <div className="min-h-screen bg-background">
+      {/* Sticky top action bar */}
+      <div className="sticky top-20 z-30 bg-background/95 backdrop-blur border-b border-border">
+        <div className="container mx-auto max-w-5xl px-4 py-3 flex items-center justify-between">
+          <Button variant="ghost" size="sm" onClick={() => router.back()} className="gap-2 text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="w-4 h-4" />
+            Back
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={handleShare} className="gap-2">
+              <Share2 className="w-4 h-4" />
+              <span className="hidden sm:inline">Share</span>
             </Button>
-          </div>
-        )}
+            <Button variant="ghost" size="sm" onClick={() => setIsSaved(!isSaved)} className={`gap-2 ${isSaved ? "text-secondary" : ""}`}>
+              <BookmarkPlus className="w-4 h-4" />
+              <span className="hidden sm:inline">{isSaved ? "Saved" : "Save"}</span>
+            </Button>
 
-        <div className="flex flex-col lg:flex-row gap-8">
-          
-          {/* Left Column: Photos & Quick Stats */}
-          <div className="w-full lg:w-1/3 shrink-0 flex flex-col gap-6">
-            
-            {/* Main Photo Gallery */}
-            <div className="bg-white rounded-2xl overflow-hidden shadow-sm border border-border group relative">
-              <div className="aspect-[4/5] relative bg-muted flex items-center justify-center overflow-hidden">
-                {!photosRevealed ? (
-                  <div className="absolute inset-0 z-0 bg-gradient-to-tr from-primary/30 to-secondary/30 backdrop-blur-3xl blur-md flex flex-col items-center justify-center p-6 text-center">
-                    <ShieldCheck className="w-20 h-20 text-foreground/20 opacity-60 mb-4" />
-                    <p className="text-lg font-serif font-bold text-foreground/80 mb-2">Photos Hidden</p>
-                    <p className="text-sm text-muted-foreground">For privacy, photos are only revealed to mutual matches.</p>
-                    <Button variant="outline" size="sm" className="mt-6 border-primary/30 text-primary hover:bg-primary/5 shadow-sm" onClick={reqPhotoUnlock}>
-                      Request Access
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="absolute inset-0 z-0 bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center">
-                     <span className="text-muted-foreground">User Photo Unlocked</span>
-                  </div>
-                )}
-                
-                <Badge className="absolute top-4 left-4 z-10 bg-black/60 hover:bg-black/70 text-white border border-white/10 backdrop-blur-md shadow-sm">
-                  1/4 Photos
-                </Badge>
-                
-                {isMutualMatch && (
-                  <div className="absolute bottom-4 right-4 z-10 flex gap-2">
-                    <div className="w-2 h-2 rounded-full bg-white opacity-100" />
-                    <div className="w-2 h-2 rounded-full bg-white/50" />
-                    <div className="w-2 h-2 rounded-full bg-white/50" />
-                    <div className="w-2 h-2 rounded-full bg-white/50" />
-                  </div>
-                )}
-              </div>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger className="p-2 hover:bg-muted rounded-full transition-colors">
+                <MoreVertical className="w-4 h-4 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setReportDialogOpen(true)} className="text-destructive">
+                  <Flag className="w-4 h-4 mr-2" />
+                  Report User
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleBlockUser}>
+                  <ShieldAlert className="w-4 h-4 mr-2" />
+                  Block User
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-            {/* Quick Actions (Desktop Sidebar) */}
-            <div className="bg-white rounded-2xl shadow-sm border border-border p-6 hidden lg:block">
-              <h3 className="font-serif font-bold text-xl mb-4 text-foreground">Connect</h3>
-              <div className="flex flex-col gap-3">
-                {!isMutualMatch ? (
-                  <Button 
-                    variant={interestSent ? "outline" : "default"}
-                    className={`w-full py-6 font-semibold shadow-sm transition-all ${interestSent ? "border-green-600 text-green-700 hover:bg-green-50" : "bg-primary hover:bg-primary-hover text-white"}`}
-                    onClick={() => setInterestSent(true)}
-                  >
-                    {interestSent ? <span className="flex items-center gap-2"><Heart className="w-5 h-5 fill-green-600 text-green-600" /> Interest Sent</span> : <span className="flex items-center gap-2"><Heart className="w-5 h-5" /> Send Interest</span>}
-                  </Button>
-                ) : (
-                  <Button className="w-full py-6 font-semibold bg-green-600 hover:bg-green-700 text-white shadow-sm flex items-center gap-2">
-                    <MessageCircle className="w-5 h-5" /> Start Chat
-                  </Button>
-                )}
-
-                <Button 
-                  variant="outline" 
-                  className={`w-full py-6 font-semibold transition-colors ${isSaved ? "border-amber-500 text-amber-600 hover:bg-amber-50" : "border-border text-foreground hover:bg-muted"}`}
-                  onClick={() => setIsSaved(!isSaved)}
-                >
-                  {isSaved ? <span className="flex items-center gap-2"><Star className="w-5 h-5 fill-amber-500 text-amber-500" /> Profile Saved</span> : <span className="flex items-center gap-2"><Star className="w-5 h-5" /> Save Profile</span>}
-                </Button>
-              </div>
-
-              <Separator className="my-6" />
-
-              {/* Safety Controls */}
-              <div className="flex flex-col gap-2">
-                <Dialog>
-                  <DialogTrigger className="w-full text-left">
-                    <span className="w-full flex justify-start text-muted-foreground hover:bg-destructive/10 text-sm font-medium hover:text-destructive transition-colors px-3 py-2 h-auto items-center gap-3">
-                      <Ban className="w-4 h-4 shrink-0" /> Block User
-                    </span>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Block Profile</DialogTitle>
-                      <DialogDescription>
-                        Are you sure you want to block this user? They will not be able to see your profile or contact you.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="flex justify-end gap-3 mt-4">
-                      <Button variant="outline">Cancel</Button>
-                      <Button variant="destructive">Block User</Button>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-                
-                <Dialog>
-                  <DialogTrigger className="w-full text-left">
-                    <span className="w-full flex justify-start text-muted-foreground hover:bg-amber-500/10 text-sm font-medium hover:text-amber-600 transition-colors px-3 py-2 h-auto items-center gap-3">
-                      <ShieldAlert className="w-4 h-4 shrink-0" /> Report Profile
-                    </span>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Report Profile</DialogTitle>
-                      <DialogDescription>
-                        Please let us know why you are reporting this user.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="flex flex-col gap-4 mt-4">
-                      <Select>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select reason" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="fake">Fake Profile</SelectItem>
-                          <SelectItem value="spam">Spam / Scam</SelectItem>
-                          <SelectItem value="abusive">Abusive Content</SelectItem>
-                          <SelectItem value="married">Already Married</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <div className="flex justify-end gap-3 mt-2">
-                        <Button variant="outline">Cancel</Button>
-                        <Button variant="destructive">Submit Report</Button>
-                      </div>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: Profile Content */}
-          <div className="flex-1 flex flex-col gap-6">
-            
-            {/* Header Details */}
-            <div className="bg-white rounded-2xl shadow-sm border border-border p-6 md:p-8">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h1 className="text-3xl md:text-4xl font-serif font-bold text-foreground mb-2 flex items-center gap-3">
-                    Priya Sharma, 28
-                    <span aria-label="Verified Profile"><ShieldCheck className="w-6 h-6 text-green-500 hidden sm:block" /></span>
-                  </h1>
-                  <p className="text-muted-foreground text-sm flex items-center gap-1.5 font-medium">
-                    Profile ID: JB-{profileId} <Copy className="w-3 h-3 ml-1 cursor-pointer hover:text-primary transition-colors" />
-                  </p>
-                </div>
-                <div className="text-right hidden sm:block">
-                  <Badge className="bg-primary/10 text-primary border-primary/20 font-medium">Premium Member</Badge>
-                  <p className="text-xs text-muted-foreground mt-2">Active 2 hrs ago</p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-4 mt-8 pt-6 border-t border-border">
-                <div className="flex items-center gap-2 bg-muted/50 px-4 py-2.5 rounded-lg border border-border/50">
-                  <Briefcase className="w-5 h-5 text-primary opacity-80" />
-                  <span className="text-sm font-medium">Software Engineer</span>
-                </div>
-                <div className="flex items-center gap-2 bg-muted/50 px-4 py-2.5 rounded-lg border border-border/50">
-                  <GraduationCap className="w-5 h-5 text-primary opacity-80" />
-                  <span className="text-sm font-medium">M.Tech (Computer Science)</span>
-                </div>
-                <div className="flex items-center gap-2 bg-muted/50 px-4 py-2.5 rounded-lg border border-border/50">
-                  <MapPin className="w-5 h-5 text-primary opacity-80" />
-                  <span className="text-sm font-medium">Mumbai, India</span>
-                </div>
-              </div>
-            </div>
-
-            {/* About Me */}
-            <div className="bg-white rounded-2xl shadow-sm border border-border p-6 md:p-8">
-              <h2 className="text-2xl font-serif font-bold text-foreground border-b border-border pb-4 mb-6 relative">
-                <span className="relative z-10 bg-white pr-4">About Me</span>
-                <div className="absolute left-0 bottom-[-1px] w-20 h-[3px] bg-primary"></div>
-              </h2>
-              <p className="text-muted-foreground leading-relaxed text-[15px]">
-                I am a very simple, caring, talented, understanding, trustworthy and kind hearted human being. I believe in the motto &quot;Live and let live&quot;. I hate liars. I am fun loving, down to earth and very much Optimist. I love travelling, sight seeing, listening to rock music, reading all the latest fiction novels.
-                <br/><br/>
-                Professionally, I am working as a Software Engineer at a leading MNC in Mumbai. My career is important to me, but I believe in maintaining a healthy work-life balance. I respect elders and family values while holding a modern outlook on life.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Personal Details */}
-              <div className="bg-white rounded-2xl shadow-sm border border-border p-6 md:p-8">
-                <h2 className="text-xl font-serif font-bold text-foreground border-b border-border pb-4 mb-6">Personal Details</h2>
-                <div className="flex flex-col gap-4 text-sm">
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Religion</span>
-                    <span className="font-semibold text-foreground text-right">Hindu</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Caste</span>
-                    <span className="font-semibold text-foreground text-right">Brahmin</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Mother Tongue</span>
-                    <span className="font-semibold text-foreground text-right">Hindi</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Height</span>
-                    <span className="font-semibold text-foreground text-right">5&apos;4&quot; (162 cm)</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Marital Status</span>
-                    <span className="font-semibold text-foreground text-right">Never Married</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Diet</span>
-                    <span className="font-semibold text-foreground text-right">Vegetarian</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Smoke / Drink</span>
-                    <span className="font-semibold text-foreground text-right">No / No</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Family Details */}
-              <div className="bg-white rounded-2xl shadow-sm border border-border p-6 md:p-8">
-                <h2 className="text-xl font-serif font-bold text-foreground border-b border-border pb-4 mb-6">Family Details</h2>
-                <div className="flex flex-col gap-4 text-sm">
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Family Type</span>
-                    <span className="font-semibold text-foreground text-right">Nuclear</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Family Values</span>
-                    <span className="font-semibold text-foreground text-right">Moderate</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Father&apos;s Status</span>
-                    <span className="font-semibold text-foreground text-right">Retired (Govt. Service)</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Mother&apos;s Status</span>
-                    <span className="font-semibold text-foreground text-right">Homemaker</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Brothers</span>
-                    <span className="font-semibold text-foreground text-right">1 (Married)</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-border/30 border-dashed">
-                    <span className="text-muted-foreground">Sisters</span>
-                    <span className="font-semibold text-foreground text-right">None</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Partner Preferences */}
-            <div className="bg-white rounded-2xl shadow-sm border border-border p-6 md:p-8">
-              <h2 className="text-2xl font-serif font-bold text-foreground border-b border-border pb-4 mb-6 relative">
-                <span className="relative z-10 bg-white pr-4">Partner Preferences</span>
-                <div className="absolute left-0 bottom-[-1px] w-24 h-[3px] bg-primary"></div>
-              </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-y-6 gap-x-8 text-sm">
-                <div>
-                  <span className="text-muted-foreground uppercase text-xs font-semibold block mb-1">Age Range</span>
-                  <span className="font-medium text-[15px]">28 to 33 Years</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground uppercase text-xs font-semibold block mb-1">Height Range</span>
-                  <span className="font-medium text-[15px]">5&apos;8&quot; to 6&apos;2&quot;</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground uppercase text-xs font-semibold block mb-1">Marital Status</span>
-                  <span className="font-medium text-[15px]">Never Married</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground uppercase text-xs font-semibold block mb-1">Core Religion</span>
-                  <span className="font-medium text-[15px]">Hindu</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground uppercase text-xs font-semibold block mb-1">Caste Preference</span>
-                  <span className="font-medium text-[15px]">Preferably Brahmin, but open minded</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground uppercase text-xs font-semibold block mb-1">Education</span>
-                  <span className="font-medium text-[15px]">Masters / Doctorate</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground uppercase text-xs font-semibold block mb-1">Location Preference</span>
-                  <span className="font-medium text-[15px]">Mumbai, Pune, NRI</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground uppercase text-xs font-semibold block mb-1">Diet Preference</span>
-                  <span className="font-medium text-[15px]">Vegetarian</span>
-                </div>
-              </div>
-            </div>
-
+            <ReportDialog
+              open={reportDialogOpen}
+              onClose={() => setReportDialogOpen(false)}
+              reportedUserId={profileId}
+              reportedName={fullName}
+            />
           </div>
         </div>
+      </div>
 
-        {/* Mobile Action Bar (Sticky Bottom) */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-border shadow-[0_-4px_20px_-10px_rgba(0,0,0,0.1)] lg:hidden flex gap-3 z-50">
-          {!isMutualMatch ? (
-            <Button 
-              className={`flex-1 font-semibold shadow-sm h-12 ${interestSent ? "border-green-600 border bg-green-50 text-green-700" : "bg-primary text-white"}`}
-              onClick={() => setInterestSent(true)}
-            >
-              {interestSent ? "Interest Sent" : "Send Interest"}
-            </Button>
-          ) : (
-            <Button className="flex-1 bg-green-600 text-white font-semibold h-12 shadow-sm">
-              Start Chat
-            </Button>
-          )}
-          <Button 
-            variant="outline" 
-            size="icon" 
-            className={`w-12 h-12 shrink-0 border-border ${isSaved ? "border-amber-500 bg-amber-50" : ""}`}
-            onClick={() => setIsSaved(!isSaved)}
-          >
-            <Star className={`w-5 h-5 ${isSaved ? "fill-amber-500 text-amber-500" : "text-foreground"}`} />
-          </Button>
+      <div className="container mx-auto max-w-5xl px-4 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+          {/* LEFT COLUMN — Photo + Actions */}
+          <div className="lg:col-span-1 space-y-4">
+            {/* Photo Card */}
+            <Card className="overflow-hidden border-border shadow-sm">
+              <div className="aspect-[4/5] relative bg-muted">
+                {profile.avatar_url && !photoBlurred ? (
+                  <img
+                    src={profile.avatar_url}
+                    alt={fullName}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-secondary/20 flex flex-col items-center justify-center">
+                    <div className="w-24 h-24 rounded-full bg-primary/20 flex items-center justify-center mb-3">
+                      <User className="w-12 h-12 text-primary/50" />
+                    </div>
+                    {photoBlurred && profile.avatar_url && (
+                      <div className="text-center px-4">
+                        <Lock className="w-5 h-5 text-muted-foreground mx-auto mb-1" />
+                        <p className="text-xs text-muted-foreground">
+                          {profile.photo_visibility === "mutual" ? "Photo visible after mutual interest" : "Photo visible to verified members"}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Gradient overlay with name */}
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-5">
+                  <h1 className="text-white font-serif font-bold text-2xl leading-tight">
+                    {fullName}{age ? `, ${age}` : ""}
+                  </h1>
+                  <p className="text-white/80 text-sm flex items-center gap-1.5 mt-1">
+                    <MapPin className="w-3.5 h-3.5" />
+                    {profile.city || "Location not set"}
+                  </p>
+                  {profile.is_verified && (
+                    <div className="mt-2 inline-flex items-center gap-1.5 bg-green-600/90 text-white text-xs font-semibold px-2.5 py-1 rounded-full">
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      Verified CA/CS Member
+                    </div>
+                  )}
+                </div>
+              </div>
+            </Card>
+
+            {/* CA/CS Badge */}
+            {profile.profession_type && (
+              <div className="flex items-center gap-2 bg-secondary/10 border border-secondary/30 rounded-xl p-3">
+                <GraduationCap className="w-5 h-5 text-secondary shrink-0" />
+                <div>
+                  <p className="font-semibold text-sm text-secondary">{profile.profession_type}</p>
+                  {profile.membership_number && (
+                    <p className="text-xs text-muted-foreground">ID: {profile.membership_number}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="space-y-3">
+              {interestStatus === "mutual" ? (
+                <>
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+                    <CheckCircle2 className="w-5 h-5 text-green-600 mx-auto mb-1" />
+                    <p className="text-sm font-semibold text-green-800">It's a Mutual Match! 🎉</p>
+                  </div>
+                  <Link href="/messages">
+                    <Button className="w-full bg-primary hover:bg-primary-hover text-white gap-2">
+                      <MessageCircle className="w-4 h-4" /> Chat Now
+                    </Button>
+                  </Link>
+                </>
+              ) : interestStatus === "sent" ? (
+                <Button disabled className="w-full gap-2 border-primary/30 text-primary" variant="outline">
+                  <Heart className="w-4 h-4 fill-primary" /> Interest Sent
+                </Button>
+              ) : interestStatus === "received" ? (
+                <>
+                  <p className="text-sm text-center text-muted-foreground">This person is interested in you!</p>
+                  <Link href="/dashboard">
+                    <Button className="w-full bg-primary hover:bg-primary-hover text-white gap-2">
+                      <Heart className="w-4 h-4" /> Respond to Interest
+                    </Button>
+                  </Link>
+                </>
+              ) : (
+                <Button
+                  onClick={handleSendInterest}
+                  disabled={sendingInterest}
+                  className="w-full bg-primary hover:bg-primary-hover text-white gap-2 active:scale-95 transition-transform"
+                >
+                  {sendingInterest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Heart className="w-4 h-4" />}
+                  Send Interest
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT COLUMN — Details */}
+          <div className="lg:col-span-2 space-y-6">
+
+            {/* About Me */}
+            {profile.about_me && (
+              <Card className="border-border shadow-sm">
+                <CardContent className="p-6">
+                  <h2 className="text-lg font-serif font-semibold mb-3 flex items-center gap-2">
+                    <Star className="w-5 h-5 text-secondary" /> About Me
+                  </h2>
+                  <p className="text-muted-foreground leading-relaxed">{profile.about_me}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Basic Details */}
+            <Card className="border-border shadow-sm">
+              <CardContent className="p-6">
+                <h2 className="text-lg font-serif font-semibold mb-5 flex items-center gap-2">
+                  <User className="w-5 h-5 text-primary" /> Basic Details
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <InfoRow icon={Calendar} label="Age" value={age ? `${age} years` : null} />
+                  <InfoRow icon={User} label="Gender" value={profile.gender ? profile.gender.charAt(0).toUpperCase() + profile.gender.slice(1) : null} />
+                  <InfoRow icon={MapPin} label="City" value={profile.city} />
+                  <InfoRow icon={Users} label="Religion" value={profile.religion} />
+                  {profile.caste && <InfoRow icon={Users} label="Caste / Community" value={profile.caste} />}
+                  <InfoRow icon={Users} label="Mother Tongue" value={profile.mother_tongue} />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Education & Career */}
+            <Card className="border-border shadow-sm">
+              <CardContent className="p-6">
+                <h2 className="text-lg font-serif font-semibold mb-5 flex items-center gap-2">
+                  <GraduationCap className="w-5 h-5 text-primary" /> Education & Career
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <InfoRow icon={GraduationCap} label="Education" value={profile.education} />
+                  <InfoRow icon={Briefcase} label="Profession" value={profile.profession} />
+                  <InfoRow icon={Briefcase} label="Annual Income" value={profile.income} />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Lifestyle */}
+            <Card className="border-border shadow-sm">
+              <CardContent className="p-6">
+                <h2 className="text-lg font-serif font-semibold mb-5 flex items-center gap-2">
+                  <Utensils className="w-5 h-5 text-primary" /> Lifestyle
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <InfoRow icon={Utensils} label="Diet" value={profile.diet} />
+                  <InfoRow icon={User} label="Smoking" value={profile.smoking} />
+                  <InfoRow icon={User} label="Drinking" value={profile.drinking} />
+                  <InfoRow icon={Home} label="Family Type" value={profile.family_type} />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Family Background */}
+            {(profile.father_occupation || profile.mother_occupation || profile.siblings !== null) && (
+              <Card className="border-border shadow-sm">
+                <CardContent className="p-6">
+                  <h2 className="text-lg font-serif font-semibold mb-5 flex items-center gap-2">
+                    <Home className="w-5 h-5 text-primary" /> Family Background
+                  </h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <InfoRow icon={User} label="Father's Occupation" value={profile.father_occupation} />
+                    <InfoRow icon={User} label="Mother's Occupation" value={profile.mother_occupation} />
+                    {profile.siblings !== null && (
+                      <InfoRow icon={Users} label="Siblings" value={profile.siblings?.toString()} />
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Partner Preferences */}
+            {(profile.pref_min_age || profile.pref_religion || profile.pref_location) && (
+              <Card className="border-border shadow-sm">
+                <CardContent className="p-6">
+                  <h2 className="text-lg font-serif font-semibold mb-5 flex items-center gap-2">
+                    <Heart className="w-5 h-5 text-primary" /> Partner Preferences
+                  </h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {profile.pref_min_age && profile.pref_max_age && (
+                      <InfoRow icon={Calendar} label="Preferred Age Range" value={`${profile.pref_min_age} – ${profile.pref_max_age} years`} />
+                    )}
+                    <InfoRow icon={Users} label="Preferred Religion" value={profile.pref_religion} />
+                    <InfoRow icon={MapPin} label="Preferred Location" value={profile.pref_location} />
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ProfileDetailPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-10 h-10 animate-spin text-primary" />
+      </div>
+    }>
+      <ProfileDetailContent />
+    </Suspense>
   );
 }

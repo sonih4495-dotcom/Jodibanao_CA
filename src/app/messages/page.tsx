@@ -7,6 +7,9 @@ import { ChatWindow } from "@/components/chat/ChatWindow";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
+import { VoiceCallModal } from "@/components/chat/VoiceCallModal";
+import { VideoCallModal } from "@/components/chat/VideoCallModal";
+
 export default function Messages() {
   const router = useRouter();
   const supabase = createClient();
@@ -16,6 +19,10 @@ export default function Messages() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMutualMatch, setIsMutualMatch] = useState(false);
+  const [partnerProfile, setPartnerProfile] = useState<any>(null);
+  
+  const [activeCallType, setActiveCallType] = useState<"voice" | "video" | null>(null);
 
   // 1. Authenticate and Load Conversations
   useEffect(() => {
@@ -55,22 +62,56 @@ export default function Messages() {
     initChat();
   }, [router]);
 
-  // 2. Fetch Active Chat Messages
+  // 2. Fetch Active Chat Messages & Match Status
   useEffect(() => {
-    if (!activeChatId) return;
+    if (!activeChatId || !user) return;
 
-    const loadMessages = async () => {
-      const { data } = await supabase
+    const loadMessagesAndStatus = async () => {
+      const { data: msgs } = await supabase
         .from("messages")
         .select("*")
         .eq("conversation_id", activeChatId)
         .order("created_at", { ascending: true });
         
-      if (data) setMessages(data);
+      if (msgs) setMessages(msgs);
+
+      const activeConversation = conversations.find(c => c.id === activeChatId);
+      if (activeConversation) {
+        const partnerId = activeConversation.user1_id === user.id 
+          ? activeConversation.user2_id 
+          : activeConversation.user1_id;
+        
+        // Fetch partner profile
+        const { data: partner } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", partnerId)
+          .maybeSingle();
+        
+        if (partner) setPartnerProfile(partner);
+
+        // Fetch interest statuses
+        const { data: myInterest } = await supabase
+          .from("interests")
+          .select("status")
+          .eq("from_user_id", user.id)
+          .eq("to_user_id", partnerId)
+          .maybeSingle();
+
+        const { data: theirInterest } = await supabase
+          .from("interests")
+          .select("status")
+          .eq("from_user_id", partnerId)
+          .eq("to_user_id", user.id)
+          .maybeSingle();
+
+        const isMutual = myInterest?.status === "accepted" && theirInterest?.status === "accepted";
+        setIsMutualMatch(isMutual);
+      }
     };
 
-    loadMessages();
-  }, [activeChatId]);
+    loadMessagesAndStatus();
+  }, [activeChatId, user, conversations]);
 
   // 3. Supabase Realtime Subscription
   useEffect(() => {
@@ -91,7 +132,10 @@ export default function Messages() {
           
           // If the message belongs to the currently active window, append it
           if (newMsg.conversation_id === activeChatId) {
-            setMessages((prev) => [...prev, newMsg]);
+            setMessages((prev) => {
+              if (prev.find((m) => m.id === newMsg.id)) return prev;
+              return [...prev, newMsg];
+            });
           }
 
           // Update sidebar previews
@@ -115,46 +159,6 @@ export default function Messages() {
       supabase.removeChannel(channel);
     };
   }, [user, activeChatId]);
-
-  const handleSendMessage = async (content: string, type = "text") => {
-    if (!activeChatId || !user) return;
-
-    // Quick optimistic update to avoid input lag
-    const tempMsg = {
-      id: crypto.randomUUID(),
-      conversation_id: activeChatId,
-      sender_id: user.id,
-      content,
-      type,
-      status: "sent",
-      created_at: new Date().toISOString()
-    };
-    
-    setMessages((prev) => [...prev, tempMsg]);
-
-    const { data, error } = await supabase
-      .from("messages")
-      .insert({
-        conversation_id: activeChatId,
-        sender_id: user.id,
-        content,
-        type,
-        status: "sent"
-      })
-      .select()
-      .maybeSingle();
-
-    if (!error && data) {
-      // Replace optimistic message with actual DB message to get correct ID
-      setMessages((prev) => prev.map(m => m.id === tempMsg.id ? data : m));
-      
-      // Update the conversation's last_message_at
-      await supabase
-        .from("conversations")
-        .update({ last_message_at: new Date().toISOString() })
-        .eq("id", activeChatId);
-    }
-  };
 
   if (isLoading) {
     return (
@@ -185,11 +189,34 @@ export default function Messages() {
             conversation={activeConversation}
             messages={messages}
             currentUserId={user?.id}
-            onSendMessage={handleSendMessage}
+            isMutualMatch={isMutualMatch}
+            partnerProfile={partnerProfile}
+            onCallStart={(type) => setActiveCallType(type)}
           />
 
         </div>
       </div>
+      
+      {/* Call Modals */}
+      {activeCallType === "voice" && partnerProfile && (
+        <VoiceCallModal 
+          currentUserId={user?.id}
+          partnerId={partnerProfile.id}
+          partnerName={`${partnerProfile.first_name || ""} ${partnerProfile.last_name || ""}`.trim() || "User"}
+          partnerAvatar={partnerProfile.avatar_url}
+          onClose={() => setActiveCallType(null)}
+        />
+      )}
+      
+      {activeCallType === "video" && partnerProfile && (
+        <VideoCallModal 
+          currentUserId={user?.id}
+          partnerId={partnerProfile.id}
+          partnerName={`${partnerProfile.first_name || ""} ${partnerProfile.last_name || ""}`.trim() || "User"}
+          partnerAvatar={partnerProfile.avatar_url}
+          onClose={() => setActiveCallType(null)}
+        />
+      )}
     </div>
   );
 }

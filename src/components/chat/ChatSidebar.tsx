@@ -46,8 +46,8 @@ export function ChatSidebar({ conversations, activeChatId, onSelectChat, current
             const preview = lastMsg?.content || (lastMsg?.media_url ? "Sent an attachment" : "Start chatting");
             const time = lastMsg?.created_at ? formatDistanceToNow(new Date(lastMsg.created_at), { addSuffix: true }) : "";
             
-            // Unread count (placeholder logic)
-            const unreadCount = 0; 
+            // Unread count
+            const unreadCount = chat.messages?.filter((m: any) => m.sender_id !== currentUserId && m.status !== 'read').length || 0; 
 
             return (
               <div 

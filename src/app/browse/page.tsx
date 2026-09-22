@@ -34,6 +34,7 @@ import {
   DEFAULT_FILTERS,
   countActiveFilters
 } from "@/components/search/AdvancedSearchDrawer";
+import { VerifiedBadge } from "@/components/ui/verified-badge";
 import { ReportDialog } from "@/components/safety/ReportDialog";
 import { toast } from "sonner";
 
@@ -54,64 +55,79 @@ export default function BrowsePage() {
   // Report dialog state
   const [reportTarget, setReportTarget] = useState<{ id: string; name: string } | null>(null);
 
-  useEffect(() => {
-    async function loadData() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
 
-      // Get current user profile
-      const { data: userProfile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
-        .maybeSingle();
+  const fetchProfiles = async (pageNumber: number) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
 
-      setCurrentUser(userProfile || { id: session.user.id });
+    // Get current user profile
+    const { data: userProfile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', session.user.id)
+      .maybeSingle();
 
-      // Get all other profiles
-      const { data: allProfiles } = await supabase
-        .from('profiles')
-        .select('*')
-        .neq('id', session.user.id);
+    setCurrentUser(userProfile || { id: session.user.id });
 
-      // Get interests I sent or received to disable buttons
-      const { data: myInterests } = await supabase
-        .from('interests')
-        .select('*')
-        .or(`from_user_id.eq.${session.user.id},to_user_id.eq.${session.user.id}`);
+    // Get paginated profiles
+    const { data: allProfiles, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .neq('id', session.user.id)
+      .range(pageNumber * 12, (pageNumber + 1) * 12 - 1);
 
-      const interestMap: Record<string, string> = {};
-      myInterests?.forEach(i => {
-        const otherId = i.from_user_id === session.user.id ? i.to_user_id : i.from_user_id;
-        interestMap[otherId] = i.status;
-      });
-      setInterestsSent(interestMap);
-
-      if (allProfiles && userProfile) {
-        // Calculate Match Scores
-        const scoredProfiles = allProfiles.map(p => {
-          const score = calculateMatchScore(userProfile, p);
-          // Calculate realistic Age
-          let age = 25;
-          if (p.dob) {
-            age = new Date().getFullYear() - new Date(p.dob).getFullYear();
-          }
-          return { ...p, calculatedScore: score, age };
-        });
-
-        // Sort by highest match score
-        scoredProfiles.sort((a, b) => b.calculatedScore - a.calculatedScore);
-
-        setProfiles(scoredProfiles);
-      } else if (allProfiles) {
-        setProfiles(allProfiles.map(p => ({ ...p, calculatedScore: 0, age: 25 })));
-      }
-
-      setLoading(false);
+    if (error || !allProfiles || allProfiles.length < 12) {
+      setHasMore(false);
     }
 
-    loadData();
+    // Get interests I sent or received to disable buttons
+    const { data: myInterests } = await supabase
+      .from('interests')
+      .select('*')
+      .or(`from_user_id.eq.${session.user.id},to_user_id.eq.${session.user.id}`);
+
+    const interestMap: Record<string, string> = {};
+    myInterests?.forEach(i => {
+      const otherId = i.from_user_id === session.user.id ? i.to_user_id : i.from_user_id;
+      interestMap[otherId] = i.status;
+    });
+    setInterestsSent(interestMap);
+
+    if (allProfiles && userProfile) {
+      // Calculate Match Scores
+      const scoredProfiles = allProfiles.map(p => {
+        const score = calculateMatchScore(userProfile, p);
+        // Calculate realistic Age
+        let age = 25;
+        if (p.dob) {
+          age = new Date().getFullYear() - new Date(p.dob).getFullYear();
+        }
+        return { ...p, calculatedScore: score, age };
+      });
+
+      // Sort by highest match score
+      scoredProfiles.sort((a, b) => b.calculatedScore - a.calculatedScore);
+
+      setProfiles(prev => pageNumber === 0 ? scoredProfiles : [...prev, ...scoredProfiles]);
+    } else if (allProfiles) {
+      setProfiles(prev => pageNumber === 0 ? allProfiles.map(p => ({ ...p, calculatedScore: 0, age: 25 })) : [...prev, ...allProfiles.map(p => ({ ...p, calculatedScore: 0, age: 25 }))]);
+    }
+
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchProfiles(0);
   }, []);
+
+  const loadMore = () => {
+    const nextPage = page + 1;
+    setPage(nextPage);
+    fetchProfiles(nextPage);
+  };
+
 
   const handleSendInterest = async (toUserId: string) => {
     if (!currentUser) return;
@@ -464,7 +480,7 @@ export default function BrowsePage() {
 
           {/* DESKTOP FILTERS SIDEBAR */}
           <div className="hidden lg:block w-80 shrink-0 space-y-4 sticky top-24">
-            <div className="bg-card border border-border/80 rounded-2xl p-4 shadow-xs">
+            <div className="bg-card border border-border/85 rounded-2xl p-4 shadow-xs">
               <div className="flex items-center justify-between pb-3 mb-4 border-b border-border/60">
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal className="w-4 h-4 text-primary" />
@@ -652,7 +668,7 @@ export default function BrowsePage() {
                   return (
                     <Card key={profile.id} className="overflow-hidden group border-border/80 shadow-xs hover:shadow-lg transition-all duration-300 flex flex-col rounded-2xl bg-card">
                       {/* Photo Area */}
-                      <div className="aspect-[4/5] relative bg-muted overflow-hidden">
+                      <Link href={`/profile/${profile.id}`} className="aspect-[4/5] relative bg-muted overflow-hidden block">
                         {/* Match Score Badge */}
                         <Badge className="absolute top-3 left-3 z-10 bg-black/60 hover:bg-black/70 text-white border-0 backdrop-blur-md shadow-xs font-semibold flex items-center gap-1 text-xs">
                           <Heart className="w-3 h-3 fill-rose-500 text-rose-500" /> {profile.calculatedScore}% Match
@@ -660,8 +676,8 @@ export default function BrowsePage() {
 
                         {/* Verified badge */}
                         {profile.is_verified && (
-                          <div className="absolute top-3 right-3 z-10 bg-blue-500 text-white rounded-full p-1 shadow-md" title="Verified CA/CS Professional">
-                            <CheckCircle2 className="w-4 h-4" />
+                          <div className="absolute top-3 right-3 z-10 bg-white rounded-full p-1 shadow-md">
+                            <VerifiedBadge size="sm" />
                           </div>
                         )}
 
@@ -704,7 +720,7 @@ export default function BrowsePage() {
                             </span>
                           </p>
                         </div>
-                      </div>
+                      </Link>
 
                       {/* Card Content & Details */}
                       <CardContent className="p-4 bg-card flex flex-col flex-1 gap-3">
@@ -765,6 +781,19 @@ export default function BrowsePage() {
                     </Card>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Load More Button */}
+            {!loading && hasMore && filteredProfiles.length > 0 && (
+              <div className="flex justify-center mt-8 mb-4">
+                <Button 
+                  onClick={loadMore} 
+                  variant="outline" 
+                  className="bg-white hover:bg-muted text-primary border-primary/20 px-8 rounded-full shadow-sm"
+                >
+                  Load More Profiles
+                </Button>
               </div>
             )}
           </div>

@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
       prefMaxAge,
       prefReligion,
       prefLocation,
+      profileFor,
     } = body;
 
     if (!email || !password) {
@@ -94,6 +95,7 @@ export async function POST(req: NextRequest) {
       pref_max_age: prefMaxAge ? parseInt(prefMaxAge) : 99,
       pref_religion: prefReligion || null,
       pref_location: prefLocation || null,
+      profile_for: profileFor || 'self',
       photo_visibility: "everyone",
       is_verified: false,
     };

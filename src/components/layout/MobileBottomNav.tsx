@@ -2,15 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Search, Heart, MessageCircle, User } from "lucide-react";
+import { Home, Search, MessageCircle, User, Sparkles } from "lucide-react";
 
 const navItems = [
-  { href: "/dashboard", icon: Home, label: "Home" },
-  { href: "/browse", icon: Search, label: "Browse" },
-  { href: "/dashboard#interests", icon: Heart, label: "Interests" },
-  { href: "/messages", icon: MessageCircle, label: "Chat" },
-  { href: "/dashboard#profile", icon: User, label: "Profile" },
+  { href: "/dashboard", label: "Home", icon: Home },
+  { href: "/discover", label: "Discover", icon: Sparkles },
+  { href: "/browse", label: "Browse", icon: Search },
+  { href: "/messages", label: "Chat", icon: MessageCircle },
+  { href: "/profile/edit", label: "Profile", icon: User },
 ];
+
 
 export function MobileBottomNav() {
   const pathname = usePathname();
