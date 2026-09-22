@@ -253,8 +253,28 @@ function MessagesContent() {
       )
       .subscribe();
 
+    // Add 3-second polling fallback to ensure messages are delivered even if WebSocket reconnects or times out
+    const pollInterval = setInterval(async () => {
+      if (!activeChatId) return;
+      const { data: latestMsgs } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("conversation_id", activeChatId)
+        .order("created_at", { ascending: true });
+
+      if (latestMsgs && latestMsgs.length > 0) {
+        setMessages((prev) => {
+          if (prev.length !== latestMsgs.length || (latestMsgs[latestMsgs.length - 1]?.id !== prev[prev.length - 1]?.id)) {
+            return latestMsgs;
+          }
+          return prev;
+        });
+      }
+    }, 3000);
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(pollInterval);
     };
   }, [user, activeChatId, supabase]);
 
