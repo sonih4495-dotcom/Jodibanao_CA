@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, Suspense, useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { ChatWindow } from "@/components/chat/ChatWindow";
@@ -25,8 +25,55 @@ function MessagesContent() {
   
   const [activeCallType, setActiveCallType] = useState<"voice" | "video" | null>(null);
 
-  // 1. Authenticate and Load Conversations
+  // Helper to load and populate conversations with profile details
+  const fetchConversationsList = useCallback(async (currentUserId: string) => {
+    // Fetch all conversations for the user
+    const { data: rawConvs, error: convError } = await supabase
+      .from("conversations")
+      .select(`
+        *,
+        messages(id, content, created_at, status, media_url, sender_id, message_type)
+      `)
+      .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`)
+      .order("last_message_at", { ascending: false });
+
+    if (convError || !rawConvs) {
+      return [];
+    }
+
+    // Collect all user IDs involved
+    const userIds = Array.from(
+      new Set(rawConvs.flatMap(c => [c.user1_id, c.user2_id]).filter(Boolean))
+    );
+
+    // Fetch profile details for all participants
+    const { data: profilesList } = await supabase
+      .from("profiles")
+      .select("id, first_name, last_name, avatar_url, city, profession_type, gender")
+      .in("id", userIds);
+
+    const profileMap = new Map((profilesList || []).map(p => [p.id, p]));
+
+    // Attach user1, user2 and sort messages
+    const enriched = rawConvs.map(c => {
+      const msgs = (c.messages || []).sort(
+        (a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      return {
+        ...c,
+        user1: profileMap.get(c.user1_id) || { id: c.user1_id, first_name: "Member" },
+        user2: profileMap.get(c.user2_id) || { id: c.user2_id, first_name: "Member" },
+        messages: msgs
+      };
+    });
+
+    return enriched;
+  }, [supabase]);
+
+  // 1. Authenticate and Initialize Chat
   useEffect(() => {
+    let isMounted = true;
+
     const initChat = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
@@ -35,35 +82,18 @@ function MessagesContent() {
         return;
       }
       
+      if (!isMounted) return;
       setUser(session.user);
 
-      // Fetch conversations where I am user1 or user2
-      const { data: myConversations } = await supabase
-        .from("conversations")
-        .select(`
-          *,
-          user1:profiles!conversations_user1_id_fkey(id, first_name, last_name, avatar_url),
-          user2:profiles!conversations_user2_id_fkey(id, first_name, last_name, avatar_url),
-          messages(id, content, created_at, status, media_url, sender_id)
-        `)
-        .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`)
-        .order("last_message_at", { ascending: false });
+      let loadedConversations = await fetchConversationsList(session.user.id);
 
-      let loadedConversations = myConversations || [];
-
-      // Sort messages
-      loadedConversations.forEach(c => {
-        c.messages?.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      });
-
-      // Check if URL specifies chatId or with (partner id)
       const paramChatId = searchParams.get("chatId");
       const paramWith = searchParams.get("with");
 
       if (paramChatId) {
         setActiveChatId(paramChatId);
-      } else if (paramWith) {
-        // Find existing conversation with this user
+      } else if (paramWith && paramWith !== session.user.id) {
+        // Find if conversation already exists with this partner
         let existing = loadedConversations.find(
           c => c.user1_id === paramWith || c.user2_id === paramWith
         );
@@ -71,39 +101,48 @@ function MessagesContent() {
         if (existing) {
           setActiveChatId(existing.id);
         } else {
-          // Create new conversation
-          const { data: newConv } = await supabase
-            .from("conversations")
-            .insert({
-              user1_id: session.user.id,
-              user2_id: paramWith,
-              last_message_at: new Date().toISOString()
-            })
-            .select(`
-              *,
-              user1:profiles!conversations_user1_id_fkey(id, first_name, last_name, avatar_url),
-              user2:profiles!conversations_user2_id_fkey(id, first_name, last_name, avatar_url),
-              messages(id, content, created_at, status, media_url, sender_id)
-            `)
-            .single();
-
-          if (newConv) {
-            loadedConversations = [newConv, ...loadedConversations];
-            setActiveChatId(newConv.id);
+          // Request conversation creation via API
+          try {
+            const res = await fetch("/api/conversations", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ partnerId: paramWith })
+            });
+            const result = await res.json();
+            if (result.conversation) {
+              // Reload conversations list
+              loadedConversations = await fetchConversationsList(session.user.id);
+              setActiveChatId(result.conversation.id);
+            }
+          } catch (e) {
+            console.error("Error creating conversation:", e);
           }
+        }
+      } else if (loadedConversations.length > 0 && !activeChatId) {
+        // Optional default to first conversation on desktop
+        if (typeof window !== "undefined" && window.innerWidth > 768) {
+          setActiveChatId(loadedConversations[0].id);
         }
       }
 
-      setConversations(loadedConversations);
-      setIsLoading(false);
+      if (isMounted) {
+        setConversations(loadedConversations);
+        setIsLoading(false);
+      }
     };
 
     initChat();
-  }, [router, searchParams]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router, searchParams, fetchConversationsList]);
 
   // 2. Fetch Active Chat Messages & Match Status
   useEffect(() => {
     if (!activeChatId || !user) return;
+
+    let isMounted = true;
 
     const loadMessagesAndStatus = async () => {
       const { data: msgs } = await supabase
@@ -112,14 +151,14 @@ function MessagesContent() {
         .eq("conversation_id", activeChatId)
         .order("created_at", { ascending: true });
         
-      if (msgs) setMessages(msgs);
+      if (isMounted && msgs) setMessages(msgs);
 
       const activeConversation = conversations.find(c => c.id === activeChatId);
-      if (activeConversation) {
-        const partnerId = activeConversation.user1_id === user.id 
-          ? activeConversation.user2_id 
-          : activeConversation.user1_id;
-        
+      const partnerId = activeConversation 
+        ? (activeConversation.user1_id === user.id ? activeConversation.user2_id : activeConversation.user1_id)
+        : searchParams.get("with");
+
+      if (partnerId) {
         // Fetch partner profile
         const { data: partner } = await supabase
           .from("profiles")
@@ -127,9 +166,9 @@ function MessagesContent() {
           .eq("id", partnerId)
           .maybeSingle();
         
-        if (partner) setPartnerProfile(partner);
+        if (isMounted && partner) setPartnerProfile(partner);
 
-        // Fetch interest statuses
+        // Fetch interest statuses to check mutual match
         const { data: myInterest } = await supabase
           .from("interests")
           .select("status")
@@ -145,19 +184,23 @@ function MessagesContent() {
           .maybeSingle();
 
         const isMutual = myInterest?.status === "accepted" && theirInterest?.status === "accepted";
-        setIsMutualMatch(isMutual);
+        if (isMounted) setIsMutualMatch(isMutual);
       }
     };
 
     loadMessagesAndStatus();
-  }, [activeChatId, user, conversations]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeChatId, user, conversations, searchParams, supabase]);
 
   // 3. Supabase Realtime Subscription
   useEffect(() => {
     if (!user) return;
 
     const channel = supabase
-      .channel("realtime-messages")
+      .channel("realtime-messages-feed")
       .on(
         "postgres_changes",
         {
@@ -195,11 +238,11 @@ function MessagesContent() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, activeChatId]);
+  }, [user, activeChatId, supabase]);
 
   if (isLoading) {
     return (
-      <div className="flex flex-col min-h-screen">
+      <div className="flex flex-col min-h-screen bg-muted/20">
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="w-8 h-8 animate-spin text-primary" />
         </div>
@@ -207,7 +250,7 @@ function MessagesContent() {
     );
   }
 
-  const activeConversation = conversations.find(c => c.id === activeChatId);
+  const activeConversation = conversations.find(c => c.id === activeChatId) || (activeChatId ? { id: activeChatId } : null);
 
   return (
     <div className="flex flex-col h-[calc(100vh-80px)] overflow-hidden bg-muted/20">
