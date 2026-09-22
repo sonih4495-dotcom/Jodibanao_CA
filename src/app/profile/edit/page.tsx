@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useRouter } from "next/navigation";
 import { Header } from "@/components/layout/Header";
@@ -15,7 +15,7 @@ import { useSearchParams } from "next/navigation";
 import { Camera, Loader2, Save, CheckCircle2, User, AlertCircle, GraduationCap, Eye, EyeOff, Lock } from "lucide-react";
 import { toast } from "sonner";
 
-export default function EditProfilePage() {
+function EditProfileContent() {
   const supabase = createClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -436,3 +436,18 @@ export default function EditProfilePage() {
     </div>
   );
 }
+
+export default function EditProfilePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center">
+          <Loader2 className="w-10 h-10 animate-spin text-primary" />
+        </div>
+      }
+    >
+      <EditProfileContent />
+    </Suspense>
+  );
+}
+

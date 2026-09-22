@@ -1,22 +1,9 @@
 import type { Metadata, Viewport } from "next";
-import { Cormorant_Garamond, DM_Sans } from "next/font/google";
 import "./globals.css";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
 import { Toaster } from "sonner";
-
-const cormorantGaramond = Cormorant_Garamond({
-  variable: "--font-serif",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-});
-
-const dmSans = DM_Sans({
-  variable: "--font-sans",
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-});
 
 export const viewport: Viewport = {
   themeColor: "#C2185B",
@@ -41,7 +28,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${dmSans.variable} ${cormorantGaramond.variable} font-sans antialiased min-h-screen flex flex-col`}>
+      <body className="font-sans antialiased min-h-screen flex flex-col">
         <Header />
         <main className="flex-1 pb-16 md:pb-0">
           {children}
